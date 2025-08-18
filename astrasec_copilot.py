@@ -460,6 +460,21 @@ class AstraSecCopilot:
         
         return queries
 
+    def _generate_investigation_queries(self, timeline_events: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Generate investigation queries based on timeline events"""
+        queries = []
+        
+        for event in timeline_events:
+            if "process" in event.get("event_type", "").lower():
+                queries.append({
+                    "target": "edr",
+                    "label": "process-details",
+                    "language": "EDRQL",
+                    "query": f"process | where timestamp == '{event.get('timestamp', '')}'"
+                })
+        
+        return queries
+
     def _execute_query(self, query: Dict[str, str]) -> Dict[str, Any]:
         """Execute a query (simulated for demo)"""
         # In real implementation, this would call actual SIEM/EDR APIs
@@ -513,6 +528,23 @@ class AstraSecCopilot:
                     "approval": "REQUIRED"
                 }
             ]
+        }
+
+    def _execute_containment_actions(self, actions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Execute containment actions"""
+        results = []
+        for action in actions:
+            if action["approval"] == "NOT_REQUIRED":
+                results.append({
+                    "action": action["action"],
+                    "status": "executed",
+                    "timestamp": datetime.now().isoformat()
+                })
+        
+        return {
+            "mode": "contain",
+            "summary": "Containment actions executed",
+            "results": results
         }
 
     def _fallback_triage_response(self, alert_data: str) -> Dict[str, Any]:
