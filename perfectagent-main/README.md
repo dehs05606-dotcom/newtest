@@ -275,6 +275,13 @@ fullagent/
   mastermind.py    prompt coherence: sealed vault, gate, composer, lineage
   covenant.py      the spec as a boundary: clauses bound to the action gate
   effects.py       what a call DOES, independent of which tool it used
+  sentinel.py      post-commit verification against reality, with rollback
+  obligation.py    the debt ledger: clauses broken by doing nothing
+  attest.py        the reply's claims, checked against the sealed record
+  horizon.py       cumulative clauses no single action can break
+  integrity.py     the prompt and the boundary must be the same bytes
+  audit.py         does this specification actually stop anything?
+  escrow.py        stage, judge as a set, then commit or discard
   tools.py         16 tools: files, shell, search, real-time web
   client.py        streaming OpenAI-compatible client (SSE, retries, cancel)
   agent.py         agent loop: LLM <-> tools, event-sourced on the kernel
@@ -471,6 +478,97 @@ after `arm()` ran. The container holds the invariant, not the caller.
 A refusal that fires in the wrapper also seals `covenant.bypassed`: getting
 there without having been refused by `gate()` means an executor skipped the
 gate. The backstop holds the line *and* reports the gap.
+
+## The enforcement lattice
+
+Guards refuse an intention. That is one point in time and one kind of
+failure, and a specification has more than one of each. Six further modules
+close the rest, each answering a question a per-call guard structurally
+cannot:
+
+| Module | The question it answers | Command |
+|---|---|---|
+| `sentinel.py` | what did the call *actually* do? | — |
+| `obligation.py` | what was never done at all? | `/enforce owed` |
+| `horizon.py` | what do all the calls add up to? | `/enforce status` |
+| `escrow.py` | is this change legal *as a set*? | — |
+| `attest.py` | is the reply true? | — |
+| `integrity.py` | are the rules still the ones shown? | `/enforce integrity` |
+| `audit.py` | do these rules stop anything? | `/enforce audit` |
+
+**`sentinel.py` — after the fact.** A gate reads a call's arguments.
+`run_command python build.py` declares nothing about the files the script
+writes, so a containment clause can be broken by a step that passed the
+gate honestly. The Sentinel re-reads the snapshotted paths once the call
+returns, derives what *really* changed, judges it with the same clauses,
+and on a violation materialises the snapshot — the write does not stand.
+Reversion is bounded by the snapshot: a write outside it is still detected
+and is reported as `unrevertable` rather than counted as undone.
+
+**`obligation.py` — the clauses broken by doing nothing.** Every guard
+catches commission; refuse hard enough and the agent complies perfectly by
+doing nothing. "Every module ships with a test" has no call to gate, so it
+becomes a *debt*:
+
+```
+§6 Every module ships with a test.
+@oblige on write src/**/*.py require exists tests/test_{stem}.py
+```
+
+Debts are folded from the log (so they survive a restart) and re-tested
+against disk on every fold (so a debt that is settled and then undone comes
+back). They block *done*, not work — the discharging write is itself work.
+A later act on a path supersedes the earlier one's debts, so a write then a
+delete cannot demand a state nothing could reach.
+
+**`horizon.py` — what no single action can break.** "A change touches at
+most 20 files" is violated by no individual write. Limits accumulate over a
+`turn` or `session` window, folded from sealed effects, and are checked on
+the **projected** total — so the limit is never crossed, rather than noticed
+once it has been.
+
+```
+§12 A change touches at most 20 files.
+@horizon per turn max files_written 20
+```
+
+**`escrow.py` — judged as a set.** Between "passes the gate" and "gets
+reverted" the write was *live*: a watcher fired, a test ran against it, a
+credential was readable. Escrow stages writes outside the tree, judges the
+complete set at once, and commits all or none. A discarded change leaves
+nothing to undo, which is stronger than undoing it correctly — and a set
+that is individually innocent but collectively forbidden is refused as the
+set it is.
+
+**`attest.py` — the reply is a claim.** Everything else governs what the
+agent *does*; nothing governs what it *says* it did, and "I ran the tests
+and they pass" is where a specification is most casually broken. The log
+already knows, so each claim is checked against it and marked SUPPORTED,
+CONTRADICTED, or UNSUPPORTED. It reports and never rewrites the model's
+words — an edited transcript would be a worse record than the log.
+
+**`integrity.py` — the same bytes.** Everything above assumes the prompt
+the model read and the clauses it is held to came from one place. Edit
+`project.txt` mid-session and there are three versions and no error
+anywhere. The spec is content-addressed and checked; drift is reported, not
+silently repaired — rules that reload themselves under an agent already
+acting on them are a worse failure than stale ones.
+
+**`audit.py` — does any of this hold?** A boundary can be perfectly built
+and guarantee nothing, because the guarantee comes from the rules. `audit`
+fires a fixed corpus of 30 probes — ordinary work plus the classic evasions
+— through the real boundary and reports what each clause actually caught,
+flagging silent clauses, contradictions and redundancy. On a real spec:
+
+```
+audit: 5 clauses · 3 enforced (60%) · 3 guards
+  probe corpus: 19/30 calls refused, 11 allowed
+    1   refused 14      3   refused 5      2   refused 2
+```
+
+`/enforce` shows the whole boundary in one view: what is in force, what it
+has stopped, what is owed, and whether the rules still agree with the
+prompt.
 
 ### Arming is not the same as coverage
 

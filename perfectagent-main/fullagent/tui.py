@@ -280,6 +280,8 @@ SLASH_COMMANDS = [
     ("/prompt", "system prompt — /prompt [main|master|list|reload]"),
     ("/covenant", "specification bound to the action boundary — "
                   "/covenant [report|clauses|test]"),
+    ("/enforce", "the whole boundary: what is in force, stopped and owed — "
+                 "/enforce [status|audit|owed|integrity]"),
     ("/mastermind", "prompt coherence ledger — sealed prompts, gate, lineage"),
     ("/dashboard", "live observability — cost, goal, agents, router, spec"),
     ("/router", "smart model routing — decisions + savings"),
@@ -1240,6 +1242,8 @@ class UI:
             self._cmd_prompt(arg)
         elif cmd == "/covenant":
             self._cmd_covenant(arg)
+        elif cmd == "/enforce":
+            self._cmd_enforce(arg)
         elif cmd == "/mastermind":
             self.print_info(self.agent.mastermind.format_status(), C["pink"])
         elif cmd == "/dashboard":
@@ -2397,6 +2401,48 @@ class UI:
         size = len(self.agent._base_prompt())
         self.print_info(f"✓ system prompt → {sub} ({size:,} chars) — "
                         "applies from the next model call", C["green"])
+
+    def _cmd_enforce(self, arg: str) -> None:
+        """The whole boundary in one view: what is in force, what it has
+        stopped, what is owed, and whether the rules agree with the prompt."""
+        from . import systemprompt
+        from .audit import audit
+        ag = self.agent
+        sub = arg.strip().lower()
+
+        if sub in ("", "status"):
+            report = ag.integrity.verify(systemprompt._SPEC, ag.covenant,
+                                         systemprompt.SPEC_SOURCE)
+            blocks = [report.describe(),
+                      ag.covenant.report(),
+                      ag.horizon.report(),
+                      ag.obligations.report(),
+                      f"sentinel: {ag.sentinel.stats()['reviews']} call(s) "
+                      f"reviewed · {ag.sentinel.stats()['reverts']} reverted"]
+            self.print_info("\n\n".join(blocks),
+                            C["green"] if report.ok else C["yellow"])
+            return
+
+        if sub == "audit":
+            self.print_info(audit(ag.covenant, ag.tools).describe(),
+                            C["cyan"])
+            return
+
+        if sub == "owed":
+            blocker = ag.obligations.blocker()
+            self.print_info(blocker or "✓ nothing is owed",
+                            C["yellow"] if blocker else C["green"])
+            return
+
+        if sub == "integrity":
+            report = ag.integrity.verify(systemprompt._SPEC, ag.covenant,
+                                         systemprompt.SPEC_SOURCE)
+            self.print_info(report.describe(),
+                            C["green"] if report.ok else C["yellow"])
+            return
+
+        self.print_error(f"unknown /enforce subcommand {sub!r} — "
+                         "status · audit · owed · integrity")
 
     def _cmd_covenant(self, arg: str) -> None:
         """Inspect the specification where it is actually enforced: the

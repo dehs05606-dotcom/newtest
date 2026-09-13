@@ -40,6 +40,10 @@ from .client import (APIError, TurnCancelled, assistant_message,
 from .config import Config, Effort, Model, Provider, PROVIDERS, model_by_id
 from .attention import AttentionEconomy
 from .covenant import Covenant
+from .horizon import Horizon
+from .integrity import Integrity
+from .obligation import Ledger
+from .sentinel import Sentinel
 from .bandit import BanditRouter
 from .brain import Brain
 from .causal import CausalEngine
@@ -279,6 +283,16 @@ class Agent:
         # The specification bound to the action boundary. It contributes no
         # prompt text — it only refuses calls that collide with a clause.
         self.covenant = Covenant(self.log, systemprompt._SPEC)
+        # The rest of the boundary: cumulative limits, debts the agent
+        # incurs by acting, and the identity of the specification in force.
+        self.horizon = Horizon(self.log, systemprompt._SPEC)
+        self.obligations = Ledger(self.log, systemprompt._SPEC)
+        self.integrity = Integrity(self.log)
+        self.integrity.seal(systemprompt._SPEC, systemprompt.SPEC_SOURCE,
+                            self.covenant)
+        # Judges a completed call by what it actually did, and reverts it
+        # when a clause was broken by effects no gate could have read.
+        self.sentinel = Sentinel(self.log, self.covenant, self.store)
         # Arm the registry: after this there is no unguarded handler to
         # call, so every executor passes the boundary whether or not it
         # remembers to ask the gate. The container arms on insertion too,
@@ -1150,6 +1164,11 @@ class Agent:
         breach = self.covenant.gate(tool.name, args)
         if breach:
             return breach
+        # cumulative clauses: refused on the PROJECTED total, so a limit is
+        # never crossed rather than noticed once it has been
+        over = self.horizon.gate(tool.name, args)
+        if over:
+            return over
         return None
 
     def _snapshot_paths(self, tool_name: str, args: dict) -> list[str]:
@@ -1209,12 +1228,17 @@ class Agent:
 
         # A2/I3: snapshot BEFORE any mutation — no write without a
         # committed recovery path
+        snapshot_tree = ""
+        snapshot_paths: list[str] = []
         if ev.name in _MUTATING_TOOLS:
             paths = self._snapshot_paths(ev.name, ev.args)
             if paths:
                 snap = self.store.take(paths)
-                # rewind/revert reads the tree back from the snapshot.taken
-                # event itself (see _snapshot_at), not from a local here
+                # kept for the Sentinel's post-commit review: rewind/revert
+                # read the tree back from the snapshot.taken event, but
+                # reverting THIS call needs it here and now
+                snapshot_tree = snap["tree"]
+                snapshot_paths = list(paths)
                 self.log.append("snapshot.taken",
                                 {"tree": snap["tree"],
                                  "paths": list(snap["paths"]),
@@ -1255,6 +1279,22 @@ class Agent:
         if ev.status == "done" and ev.result.startswith("ERROR:"):
             ev.status = "error"
         ev.duration = time.time() - started
+
+        # The boundary's other half: the gate judged an intention, this
+        # judges what occurred. A call whose real effects broke a clause is
+        # reverted to the snapshot taken before it ran, so a step nobody
+        # could analyse ahead of time still does not get to keep its result.
+        if ev.status == "done" and snapshot_tree:
+            review = self.sentinel.review(ev.name, snapshot_tree,
+                                          snapshot_paths)
+            if not review.clean:
+                ev.status = "error"
+                ev.result = review.detail
+        # cumulative measures and the debts this act incurred are sealed
+        # only for a call that actually stood
+        if ev.status == "done":
+            self.horizon.spend(ev.name, ev.args)
+            self.obligations.record(ev.name, ev.args)
 
         # §37.4: after EVERY successful write, re-check the anti-clauses
         if ev.status == "done" and ev.name in _MUTATING_TOOLS:

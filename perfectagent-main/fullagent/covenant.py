@@ -348,9 +348,21 @@ def evaluate(guards: list[Guard], tool: str, args: dict) -> list[Violation]:
     the same act is judged identically however it is spelled. Pure and
     deterministic: same call, same guards, same verdict — always.
     """
+    return evaluate_effects(guards, derive(tool, args), tool=tool,
+                            command=str(args.get("command") or ""))
+
+
+def evaluate_effects(guards: list[Guard], effects: list[Effect],
+                     tool: str = "", command: str = "") -> list[Violation]:
+    """Judge effects directly.
+
+    evaluate() derives effects from a pending call — an intention. Effects
+    can also be observed AFTER the fact, from what actually changed on
+    disk (see sentinel.py), and the same clauses must judge both. Keeping
+    the rule in one place is what makes an intended write and a realised
+    one impossible to judge differently.
+    """
     out: list[Violation] = []
-    effects = derive(tool, args)
-    command = str(args.get("command") or "")
     mutations = [e for e in effects if e.kind in (WRITE, DELETE)]
     opaque = [e for e in effects if e.kind == OPAQUE]
 
@@ -471,6 +483,11 @@ class Covenant:
         """Evaluate the pending call. Returns the violations; the caller
         (Agent._gate) turns a non-empty list into a refusal."""
         return evaluate(self.guards, tool, args)
+
+    def check_effects(self, effects: list[Effect]) -> list[Violation]:
+        """Evaluate effects observed rather than intended — the same
+        clauses, applied to what actually happened."""
+        return evaluate_effects(self.guards, effects)
 
     def cite(self, violations: list[Violation]) -> str:
         """The refusal text — every clause that refused, by id and title."""
