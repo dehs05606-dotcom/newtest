@@ -274,6 +274,7 @@ fullagent/
   systemprompt.py  the ONE home of every system prompt (single source)
   mastermind.py    prompt coherence: sealed vault, gate, composer, lineage
   covenant.py      the spec as a boundary: clauses bound to the action gate
+  effects.py       what a call DOES, independent of which tool it used
   tools.py         16 tools: files, shell, search, real-time web
   client.py        streaming OpenAI-compatible client (SSE, retries, cancel)
   agent.py         agent loop: LLM <-> tools, event-sourced on the kernel
@@ -399,12 +400,56 @@ because you believe you are covered.
 
 | Guard | Refuses a call when |
 |---|---|
-| `forbid_tool` | the tool is used at all |
-| `forbid_path` | it touches paths matching these globs |
-| `confine_paths` | a mutating call leaves these roots (`..` cannot escape) |
+| `forbid_tool` | this tool is used (names a tool, not an act) |
+| `forbid_effect` | any `write` / `delete` / `exec` / `opaque` effect occurs, **by any route** |
+| `forbid_path` | a write or delete lands on these globs |
+| `confine_paths` | a write or delete leaves these roots (`..` cannot escape) |
 | `forbid_content` | written content matches this regex |
 | `require_content` | content for `where`-matching paths *lacks* this regex |
 | `forbid_command` | `run_command`'s command matches this regex |
+
+### Guards bind to effects, not to tool names
+
+A guard bound to a tool name is a guard bound to *spelling*. `write_file`
+with path `/etc/cron.d/x` and `run_command` with `echo b > /etc/cron.d/x`
+are the same act. A rule that refuses the first and permits the second does
+not constrain the agent — it constrains its vocabulary, and any model
+routes around it simply by picking a different tool for the same job.
+
+So guards never see tool calls. `effects.py` reduces every call to what it
+**does** — `write` / `delete` / `exec` / `opaque` — shell commands
+included: redirections, heredocs, pipelines, `rm` `mv` `cp` `tee` `dd`
+`sed -i` `truncate` `ln` `chmod`. One clause then holds across every route
+to the same effect:
+
+```
+§1 Writes stay under src/ and tests/     →  confine_paths: src, tests
+
+write_file  /etc/cron.d/x                          REFUSED
+run_command echo b > /etc/cron.d/x                 REFUSED   (same effect)
+run_command cp src/a.py /etc/y                     REFUSED   (same effect)
+run_command cat > /etc/z <<'EOF' …                 REFUSED   (same effect)
+run_command echo hi > src/note.txt                 allowed
+run_command pytest -q                              allowed
+```
+
+**The opaque case** is what makes this airtight rather than merely broad.
+Some commands cannot be analysed before they run — `eval "$CMD"`,
+`bash -c …`, `python3 -c …`, `curl … | sh`, a redirect to `$DIR/f`. Their
+effects are unknowable, so no containment claim about them can be *proven*.
+
+An unprovable claim is not treated as a passing one: under a
+`confine_paths` or `forbid_path` clause an opaque call is **refused**,
+because "all writes stay under `src/`" is exactly the guarantee such a
+command breaks. Where you declared no containment, opaque commands run
+normally — the boundary only ever refuses what its clauses actually claim.
+
+That asymmetry is deliberate. A guard that fails *open* when it cannot see
+is decorative: it holds only for actions transparent enough not to need it.
+
+`/covenant test <tool> <json>` prints the effects derived from a call
+before it judges them, so you can see exactly what a rule will be matched
+against while writing it.
 
 Rules may also be written as JSON, which may span lines:
 

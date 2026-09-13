@@ -2445,6 +2445,15 @@ class UI:
             if not isinstance(args, dict):
                 self.print_error("args must be a JSON object")
                 return
+            from .effects import derive
+            effects = derive(tool, args)
+            lines = ["effects derived from this call:"]
+            if not effects:
+                lines.append("  (none — this tool has no named effects)")
+            for e in effects:
+                where = f" {e.path}" if e.path else ""
+                lines.append(f"  {e.kind:<7}{where:<40} {e.reason}")
+            self.print_info("\n".join(lines), C["cyan"])
             breach = cov.gate(tool, args)
             if breach:
                 self.print_error(breach)

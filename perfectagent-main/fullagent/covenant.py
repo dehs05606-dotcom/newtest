@@ -47,11 +47,22 @@ Every evaluation is sealed to the event log ('covenant.blocked',
 'covenant.cleared'), so adherence per clause is an auditable number rather
 than an impression.
 
+Guards bind to EFFECTS, not to tool names (see effects.py). `write_file`
+with path "/etc/x" and `run_command` with "echo boom > /etc/x" are the same
+act, and a rule that refuses one while permitting the other constrains only
+the agent's vocabulary. Every call is reduced to what it DOES — writes,
+deletes, execs — and the guards judge that, so a clause written once holds
+across every route to the same effect. Where a command's effects cannot be
+determined before it runs, a containment clause refuses it rather than
+assuming the best: an unprovable claim is not a passing one.
+
 Guard kinds (all evaluated on the pending call, all deterministic):
 
-    forbid_tool      tool name must not be used at all
-    forbid_path      call must not touch paths matching these globs
-    confine_paths    mutating calls must stay under these roots
+    forbid_tool      this tool must not be used (names a tool, not an act)
+    forbid_effect    no effect of this kind, by any route: write | delete |
+                     exec | opaque
+    forbid_path      no write or delete may land on these globs
+    confine_paths    every write and delete must land under these roots
     forbid_content   written content must not match this regex
     require_content  written content MUST match this regex (scoped by
                      `where`, a path glob — an unscoped require would fire
@@ -68,25 +79,21 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 
+from .effects import DELETE, EXEC, OPAQUE, WRITE, Effect, derive
 from .kernel import EventLog
 
-# tools whose arguments carry a filesystem path, and under which keys
-_PATH_ARGS: dict[str, tuple[str, ...]] = {
-    "write_file": ("path",), "edit_file": ("path",),
-    "create_directory": ("path",), "delete_path": ("path",),
-    "copy_path": ("src", "dst"), "move_path": ("src", "dst"),
-}
-# tools that write caller-supplied content, and under which keys
-_CONTENT_ARGS: dict[str, tuple[str, ...]] = {
-    "write_file": ("content",),
-    "edit_file": ("new_string",),
-}
-_MUTATING = set(_PATH_ARGS)
+_EFFECT_KINDS = frozenset({WRITE, DELETE, EXEC, OPAQUE})
 
 _GUARD_KINDS = frozenset({
     "forbid_tool", "forbid_path", "confine_paths",
     "forbid_content", "require_content", "forbid_command",
+    "forbid_effect",
 })
+
+# guards that make a claim about WHERE effects may land. An effect whose
+# location cannot be determined before it runs (see effects.OPAQUE) cannot
+# satisfy such a claim, so these refuse it rather than assuming the best.
+_CONTAINMENT = frozenset({"confine_paths", "forbid_path"})
 
 # a clause header: "§4.2 Title", "4.2 Title", "## Title", "[no-secrets] Title"
 _CLAUSE_RE = re.compile(
@@ -206,6 +213,10 @@ def _parse_guard(clause_id: str, rest: str) -> tuple[Guard | None, str]:
                       f"(a path glob) so it scopes to the files it means")
     if kind == "forbid_tool" and not value:
         return None, f"{clause_id}: forbid_tool needs a tool name"
+    if kind == "forbid_effect":
+        if value not in _EFFECT_KINDS:
+            return None, (f"{clause_id}: forbid_effect must be one of "
+                          f"{', '.join(sorted(_EFFECT_KINDS))}")
     if kind == "confine_paths" and not roots:
         return None, f"{clause_id}: confine_paths needs at least one root"
     if kind == "forbid_path" and not globs:
@@ -323,60 +334,92 @@ def _under_root(path: str, root: str) -> bool:
     return norm == r or norm.startswith(r + "/") if r else True
 
 
-def call_paths(tool: str, args: dict) -> list[str]:
-    return [str(args[k]) for k in _PATH_ARGS.get(tool, ()) if args.get(k)]
-
-
-def call_content(tool: str, args: dict) -> str:
-    return "\n".join(str(args.get(k) or "")
-                     for k in _CONTENT_ARGS.get(tool, ()))
+def _via(effect: Effect) -> str:
+    """How this effect was reached — named in the citation so a refusal on
+    a shell route reads as clearly as one on a direct call."""
+    return f" (via {effect.reason})" if effect.reason else ""
 
 
 def evaluate(guards: list[Guard], tool: str, args: dict) -> list[Violation]:
-    """Every guard this pending call collides with. Pure and deterministic:
-    same call, same guards, same verdict — always."""
+    """Every guard this pending call collides with.
+
+    Guards are matched against the call's EFFECTS, not its tool name, so
+    the same act is judged identically however it is spelled. Pure and
+    deterministic: same call, same guards, same verdict — always.
+    """
     out: list[Violation] = []
-    paths = call_paths(tool, args)
-    content = call_content(tool, args)
-    command = str(args.get("command") or "") if tool in (
-        "run_command", "bg_shell", "shell") else ""
+    effects = derive(tool, args)
+    command = str(args.get("command") or "")
+    mutations = [e for e in effects if e.kind in (WRITE, DELETE)]
+    opaque = [e for e in effects if e.kind == OPAQUE]
 
     for g in guards:
         if g.kind == "forbid_tool":
             if tool == g.value:
                 out.append(Violation(g.clause, g.kind,
                                      f"tool {tool!r} is forbidden"))
+
+        elif g.kind == "forbid_effect":
+            for e in effects:
+                if e.kind == g.value:
+                    where = f" on {e.path!r}" if e.path else ""
+                    out.append(Violation(
+                        g.clause, g.kind,
+                        f"{e.kind} effect{where} is forbidden{_via(e)}"))
+
         elif g.kind == "forbid_path":
-            for p in paths:
-                hit = next((x for x in g.globs if _matches_glob(p, x)), None)
+            for e in mutations:
+                hit = next((x for x in g.globs
+                            if e.path and _matches_glob(e.path, x)), None)
                 if hit:
-                    out.append(Violation(g.clause, g.kind,
-                                         f"path {p!r} matches forbidden "
-                                         f"pattern {hit!r}"))
+                    out.append(Violation(
+                        g.clause, g.kind,
+                        f"{e.kind} to {e.path!r} matches forbidden pattern "
+                        f"{hit!r}{_via(e)}"))
+            for e in opaque:
+                out.append(Violation(
+                    g.clause, g.kind,
+                    f"effects cannot be determined before running, so this "
+                    f"call cannot be shown to avoid {list(g.globs)} — "
+                    f"{e.reason}"))
+
         elif g.kind == "confine_paths":
-            if tool in _MUTATING:
-                for p in paths:
-                    if not any(_under_root(p, r) for r in g.roots):
-                        out.append(Violation(
-                            g.clause, g.kind,
-                            f"path {p!r} is outside the permitted roots "
-                            f"{list(g.roots)}"))
+            for e in mutations:
+                if e.path and not any(_under_root(e.path, r)
+                                      for r in g.roots):
+                    out.append(Violation(
+                        g.clause, g.kind,
+                        f"{e.kind} to {e.path!r} is outside the permitted "
+                        f"roots {list(g.roots)}{_via(e)}"))
+            for e in opaque:
+                out.append(Violation(
+                    g.clause, g.kind,
+                    f"effects cannot be determined before running, so this "
+                    f"call cannot be shown to stay under {list(g.roots)} — "
+                    f"{e.reason}"))
+
         elif g.kind == "forbid_content":
-            if content:
-                m = re.search(g.value, content)
+            for e in mutations:
+                if not e.content:
+                    continue
+                m = re.search(g.value, e.content)
                 if m:
                     out.append(Violation(
                         g.clause, g.kind,
-                        f"content matches forbidden pattern at offset "
-                        f"{m.start()}: {m.group(0)[:60]!r}"))
+                        f"content written to {e.path!r} matches forbidden "
+                        f"pattern: {m.group(0)[:60]!r}{_via(e)}"))
+
         elif g.kind == "require_content":
-            if tool in _CONTENT_ARGS and content:
-                scoped = [p for p in paths if _matches_glob(p, g.where)]
-                if scoped and not re.search(g.value, content):
+            for e in mutations:
+                if e.kind != WRITE or not e.content:
+                    continue
+                if e.path and _matches_glob(e.path, g.where) \
+                        and not re.search(g.value, e.content):
                     out.append(Violation(
                         g.clause, g.kind,
-                        f"{scoped[0]!r} must contain a match for "
-                        f"{g.value!r} and does not"))
+                        f"{e.path!r} must contain a match for {g.value!r} "
+                        f"and does not{_via(e)}"))
+
         elif g.kind == "forbid_command":
             if command:
                 m = re.search(g.value, command)
@@ -575,16 +618,73 @@ It is documentation, and the report says so rather than pretending.
         assert cov.gate("write_file", {"path": "README.md",
                                        "content": "x"})
 
-        # 3. determinism: the same call always gets the same verdict
+        # 3. EFFECT EQUIVALENCE — the same act is refused however it is
+        # spelled. Each pair below is one act by two routes; before guards
+        # bound to effects, the shell route walked straight through.
+        escapes = [
+            ("1", ("write_file", {"path": "/etc/cron.d/x", "content": "b"}),
+                  ("run_command", {"command": "echo b > /etc/cron.d/x"})),
+            # single-quoted so the shell preserves the inner quotes, i.e.
+            # the bytes that actually land in the file
+            ("2", ("write_file", {"path": "src/c.py",
+                                  "content": 'API_KEY = "sk-ab1"'}),
+                  ("run_command",
+                   {"command": "echo 'API_KEY=\"sk-ab1\"' > src/c.py"})),
+            ("1", ("write_file", {"path": "/etc/y", "content": "b"}),
+                  ("run_command", {"command": "cp src/a.py /etc/y"})),
+            ("1", ("write_file", {"path": "/etc/z", "content": "b"}),
+                  ("run_command", {"command": "mv src/a.py /etc/z"})),
+        ]
+        for clause_id, direct, indirect in escapes:
+            d = {v.clause for v in cov.check(*direct)}
+            i = {v.clause for v in cov.check(*indirect)}
+            assert clause_id in d, (direct, d)
+            assert clause_id in i, ("escape still open", indirect, i)
+
+        # heredocs carry content, so a content rule reaches them too
+        assert cov.gate("run_command", {
+            "command": "cat > src/c.py <<'EOF'\nAPI_KEY = \"sk-9\"\nEOF"})
+
+        # a sequenced command is judged segment by segment
+        assert cov.gate("run_command",
+                        {"command": "pytest -q && echo x > /etc/w"})
+
+        # in-policy shell work is untouched
+        for ok in ("pytest -q", "ls -la src", "grep -rn foo src/",
+                   "echo hello > src/note.txt", "mkdir -p tests/unit"):
+            assert cov.gate("run_command", {"command": ok}) is None, ok
+
+        # 3b. the opaque case: a call whose effects cannot be read cannot
+        # satisfy a containment clause, so it is refused rather than waved
+        # through on the assumption that it behaves.
+        for blind in ('eval "$CMD"', 'bash -c "rm -rf /"',
+                      'echo x > $DIR/f', 'cat f | xargs rm'):
+            r = cov.gate("run_command", {"command": blind})
+            assert r and "cannot be determined" in r, (blind, r)
+
+        # 3c. forbid_effect refuses an act by ANY route, tool or shell
+        eff_log = EventLog(Path(td) / "eff.jsonl")   # own log: see (5) below
+        eff = Covenant(eff_log, "§7 Nothing is ever deleted\n"
+                                "@enforce forbid_effect: delete\n")
+        assert eff.gate("delete_path", {"path": "a"})
+        assert eff.gate("run_command", {"command": "rm -f a"})
+        assert eff.gate("run_command", {"command": "mv a b"})
+        assert eff.gate("run_command", {"command": "ls"}) is None
+        bad_eff = Covenant(log, "§8 x\n@enforce forbid_effect: sideways\n")
+        assert bad_eff.errors and "forbid_effect" in bad_eff.errors[0]
+
+        # 4. determinism: the same call always gets the same verdict
         call = ("write_file", {"path": "/etc/passwd", "content": "x"})
         assert cov.check(*call) == cov.check(*call)
 
-        # 4. a violation is sealed, and never silently swallowed
+        # 5. every block is sealed, and never silently swallowed (cov is
+        # the only Covenant writing to this log — eff has its own)
         events = [e for e in log.events() if e.type == "covenant.blocked"]
-        assert len(events) == cov.blocked and cov.blocked >= 6
+        assert len(events) == cov.blocked, (len(events), cov.blocked)
+        assert cov.blocked >= 6
         assert events[0].data["violations"][0]["clause"]
 
-        # 5. malformed rules are reported, never guessed at
+        # 6. malformed rules are reported, never guessed at
         bad = Covenant(log, "§9 x\n@enforce nonsense: y\n"
                             "§10 y\n@enforce forbid_content: [unclosed\n"
                             "§11 z\n@enforce require_content: x\n")
