@@ -2369,8 +2369,14 @@ class UI:
             lines = [f"system prompt: {current}  (source: systemprompt.py)"]
             for name in systemprompt.names():
                 mark = "●" if name == current else "○"
-                size = len(systemprompt.get(name))
-                lines.append(f"  {mark} {name:<8} {size:>8,} chars")
+                text = systemprompt.get(name)
+                carries = ("carries the spec"
+                           if systemprompt.SPEC.strip()
+                           and systemprompt.SPEC in text
+                           else "NO SPEC" if systemprompt.SPEC.strip()
+                           else "")
+                lines.append(f"  {mark} {name:<8} {len(text):>9,} chars  "
+                             f"{carries}")
             # a missing master spec is otherwise invisible: 'master' simply
             # serves the compact prompt and nothing says so
             lines.append("")
@@ -2388,6 +2394,17 @@ class UI:
             self.print_error(f"unknown prompt {sub!r} — available: "
                              + ", ".join(systemprompt.names()))
             return
+        # selecting a prompt that does not carry the specification is a
+        # legitimate choice and must not be a silent one: it is the one
+        # switch that turns the whole specification off for the sovereign
+        # agent, and nothing said so before.
+        if systemprompt.SPEC.strip() and \
+                systemprompt.SPEC not in systemprompt.get(sub):
+            self.print_error(
+                f"NOTE: {sub!r} does not carry your specification "
+                f"({systemprompt.SPEC_CHARS:,} chars). The sovereign agent "
+                f"will run without it; sub-agents still carry it. "
+                f"Use /prompt master to put it back.")
         self.cfg.prompt = sub
         self.cfg.save()
         # re-seat the live conversation's system prompt through the gate

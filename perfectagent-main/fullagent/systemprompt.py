@@ -130,6 +130,38 @@ ROLE_BRIEFS: dict[str, str] = {
 # Builders — the only functions the rest of the code calls
 # ---------------------------------------------------------------------------
 
+def _bind_spec(prompt: str) -> str:
+    """Append the specification to a sub-agent's prompt.
+
+    The specification used to reach the sovereign agent and nothing else.
+    Every sub-agent — the coder, the tester, the refactorer, the one that
+    actually writes the files — received a ~640-char role brief carrying
+    none of the author's rules, so the rules governed the agent that
+    delegates and not one of the agents that act.
+
+    That is the whole specification failing quietly. A rule about how code
+    is written does not reach the thing writing the code, and the work
+    comes back out of policy through a route nobody closed.
+
+    The cost is real and is the right trade: every sub-agent request now
+    carries the full specification. A specification cheap enough to skip
+    for the workers is one the workers do not follow.
+    """
+    if not SPEC.strip():
+        return prompt
+    return (
+        prompt
+        + "\n\n"
+        + "=" * 72
+        + "\nFULL MASTER SPECIFICATION — binding on you exactly as it is on "
+          "the agent that dispatched you. Every invariant and contract "
+          "below applies to your work.\n"
+        + "=" * 72
+        + "\n\n"
+        + SPEC
+    )
+
+
 def main() -> str:
     """The sovereign agent's system prompt."""
     return MAIN
@@ -137,13 +169,14 @@ def main() -> str:
 
 def scout() -> str:
     """A scout sub-agent's system prompt."""
-    return SCOUT
+    return _bind_spec(SCOUT)
 
 
 def worker(role: str, max_workers: int) -> str:
     """A worker sub-agent's system prompt for the given role."""
     brief = ROLE_BRIEFS.get(role, ROLE_BRIEFS["coder"])
-    return WORKER.format(role_brief=brief, max_workers=max_workers)
+    return _bind_spec(WORKER.format(role_brief=brief,
+                                    max_workers=max_workers))
 
 
 def with_system(messages: list[dict], system: str) -> list[dict]:
@@ -333,6 +366,27 @@ if __name__ == "__main__":
         assert _sp.SPEC == SPEC, "an env var changed the specification"
     finally:
         _os.environ.pop("FULLAGENT_SPEC", None)
+
+    # EVERY dispatched agent carries the specification, not just the
+    # sovereign one. The workers are what actually write the files, and
+    # they used to receive a ~640-char role brief with none of the rules.
+    # (run as __main__, so the globals here are the ones the builders read;
+    # importing the module by name would patch a second, separate copy)
+    _g = globals()
+    _saved = _g["SPEC"]
+    try:
+        probe = "§1 MY RULE — binding on every agent\n" + "x" * 5_000
+        _g["SPEC"] = probe
+        for role in ROLE_BRIEFS:
+            assert probe in worker(role, 8), f"worker:{role} lost the spec"
+        assert probe in scout(), "scout lost the spec"
+        # and an empty spec adds nothing rather than an empty banner
+        _g["SPEC"] = ""
+        assert worker("coder", 8) == WORKER.format(
+            role_brief=ROLE_BRIEFS["coder"], max_workers=8)
+        assert scout() == SCOUT
+    finally:
+        _g["SPEC"] = _saved
 
     # the sovereign prompts cannot be replaced at runtime
     for locked in ("main", "master", "scout"):

@@ -347,6 +347,43 @@ Two prompts ship in the registry, switchable live with `/prompt`:
 | `main` | ~2.4k chars | the compact sovereign-agent prompt |
 | `master` | MAIN + your spec | MAIN + the full master specification (`project.txt`) embedded verbatim — the entire architecture, invariants, subsystem contracts and Goal-Mode grammar in context |
 
+### Every agent carries it, not just the sovereign one
+
+The specification used to reach the sovereign agent and **nothing else**.
+Measured with a 149k spec installed:
+
+```
+sovereign (master)      151,724 chars   spec: YES
+scout                       675 chars   spec: NO
+worker:coder                641 chars   spec: NO
+worker:tester               665 chars   spec: NO
+worker:reviewer             646 chars   spec: NO
+```
+
+The agents that actually write the files received a ~640-char role brief
+carrying none of the author's rules. The specification governed the agent
+that *delegates* and not one of the agents that *act* — so a rule about how
+code is written never reached the thing writing the code, and work came
+back out of policy through a route nobody had closed.
+
+`scout()` and `worker()` now bind the specification the same way `MASTER`
+does, verified through the real dispatch path (`mastermind.gate.dispatch`,
+which is what crew.py calls):
+
+```
+worker:coder delivered 149,977 chars
+spec inside: YES      vault.verify passes: True
+```
+
+The cost is real and is the right trade: every sub-agent request now
+carries the full specification. **A specification cheap enough to skip for
+the workers is one the workers do not follow.**
+
+`main` still does not carry it — that is what `main` is — but selecting it
+is no longer silent. `/prompt main` says plainly that the sovereign agent
+will run without the specification, and `/prompt` marks each prompt
+`carries the spec` or `NO SPEC`.
+
 ### Installing the master specification
 
 The specification is **not a file**. It is a constant in
