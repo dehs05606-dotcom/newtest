@@ -399,6 +399,19 @@ class Agent:
         sealed = self.mastermind.vault.get(name)
         return sealed if sealed is not None else systemprompt.get(name)
 
+    def _salient_section(self, request: str) -> str:
+        """The clauses this request implicates, for the end of context.
+
+        The specification still ships whole in the system prompt. This is
+        the same text again, in the position a long prompt loses: with
+        hundreds of clauses the few that govern a turn sit in the middle,
+        which is where recall is weakest.
+        """
+        try:
+            return self.charter.salient(request, list(self.tools))
+        except Exception:   # noqa: BLE001 — never lose a turn to this
+            return ""
+
     def _reseat_system_prompt(self,
                               sections: dict[str, str] | None = None
                               ) -> None:
@@ -408,6 +421,23 @@ class Agent:
         and seals a prompt.dispatch lineage event."""
         self.messages, _ = self.mastermind.gate.dispatch(
             self.cfg.prompt, self.messages, sections=sections)
+
+    def _redraft(self, turn, note: str) -> str:
+        """Ask the model for another draft that meets the output contract.
+
+        The note names the rule and the miss; it never supplies wording.
+        A failure here returns "" so conform.run() keeps the original draft
+        rather than losing the turn.
+        """
+        try:
+            msgs = list(self.messages) + [{"role": "user", "content": note}]
+            # no tools on a redraft: this asks for the same answer in a
+            # conforming shape, not for more work
+            result = chat_blocking(self.provider, self.model, self.effort,
+                                   msgs, None, timeout=120.0)
+            return result.content or ""
+        except Exception:   # noqa: BLE001 — a lost retry must not lose the draft
+            return ""
 
     def state(self):
         """Live projection of the event log (cost, goal, dead-ends, …)."""
@@ -434,6 +464,9 @@ class Agent:
         Mastermind gate (constitution, goal, web, memory). The framing is
         the composer's job — bodies here are plain content only."""
         sections: dict[str, str] = {}
+        block = self._salient_section(query)
+        if block:
+            sections["salient"] = block
         constitution = self.oracle.read_constitution()
         if constitution.strip():
             sections["constitution"] = constitution.strip()
@@ -617,6 +650,14 @@ class Agent:
                                  "session": self.session_id},
                                 actor="sovereign", provenance="model",
                                 causation_id=user_ev.id)
+                # the output contract is checked against the DRAFT: a
+                # reply that breaks an @output clause is not a record to
+                # preserve, it is a draft that has not met the contract.
+                shaped = self.charter.shape(
+                    result.content,
+                    lambda note: self._redraft(turn, note))
+                result.content = shaped.annotated()
+
                 # the reply is a claim about the world, and the log knows:
                 # a contradicted claim is surfaced rather than left to
                 # stand as the only artefact the user actually reads

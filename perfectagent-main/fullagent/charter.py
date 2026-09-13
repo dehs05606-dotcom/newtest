@@ -57,8 +57,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import attest as attest_mod
+from . import salience as salience_mod
 from . import remedy
 from .consent import Consent
+from .conform import Conform
 from .covenant import Covenant
 from .effects import derive
 from .egress import Perimeter
@@ -116,6 +118,11 @@ class Charter:
         # obligations (done-gating, never work-gating)
         self.obligations = Ledger(log, self.spec)
 
+        # adherence, as distinct from enforcement: the rules this turn
+        # touches, restated where attention is strongest, and the output
+        # contract checked against the draft before it is accepted.
+        self.conform = Conform(log, self.spec)
+
         # evidence
         self.witness = Witness(log)
         self.integrity = Integrity(log)
@@ -141,7 +148,7 @@ class Charter:
         self.spec = spec or ""
         for sub in (self.sequence, self.covenant, self.provenance,
                     self.egress, self.horizon, self.ration,
-                    self.exemptions, self.obligations):
+                    self.exemptions, self.obligations, self.conform):
             sub.bind(self.spec)
         self.integrity.seal(self.spec, spec_source, self.covenant)
         if spec_source:
@@ -267,6 +274,20 @@ class Charter:
             self.provenance.observe(tool, args, result)
         return ""
 
+    def salient(self, request: str, tools: list[str] | None = None) -> str:
+        """The clauses this request touches, to place at the end of the
+        context. Empty when nothing is implicated — a block announcing that
+        no rules apply would be a sentence this package invented, and it
+        would read as permission."""
+        if not self.covenant.clauses:
+            return ""
+        return salience_mod.block(self.covenant.clauses, request, tools)
+
+    def shape(self, draft: str, regenerate):
+        """Check a draft against the output contract, asking for another if
+        it does not meet it. Bounded, and honest when it never does."""
+        return self.conform.run(draft, regenerate)
+
     def attest(self, reply: str):
         """Check the reply's claims against the sealed record.
 
@@ -306,7 +327,7 @@ class Charter:
         out: list[str] = []
         for sub in (self.covenant, self.sequence, self.provenance,
                     self.egress, self.horizon, self.ration,
-                    self.exemptions, self.obligations):
+                    self.exemptions, self.obligations, self.conform):
             out.extend(getattr(sub, "errors", []) or [])
         return out
 
@@ -324,6 +345,7 @@ class Charter:
             self.exemptions.report(),
             self.consent.report(),
             self.obligations.report(),
+            self.conform.report(),
             self.witness.report(),
         ]
         errs = self.errors()
@@ -429,6 +451,31 @@ if __name__ == "__main__":
         # the obligation does not refuse the discharging write
         assert ch2.gate("write_file", {"path": "tests/test_parser.py",
                                        "content": "t"}).allowed
+
+        # -- adherence: the clauses this turn touches, at the end ----------
+        extra = (
+            "\n[SQL] Queries go through the repository layer\n"
+            "Never write SQL inline in a handler.\n"
+            "\n[OUT] Test results carry the exit code\n"
+            "@output forbid (?i)tests? pass(?![^.]*exit)\n"
+        )
+        rich = Charter(EventLog(root / "rich.jsonl"), spec + extra)
+        blk = rich.salient("add a repository method for the orders query")
+        assert "repository layer" in blk, blk
+        assert "CLAUSES THIS REQUEST TOUCHES" in blk
+        # an unrelated request restates nothing at all
+        assert rich.salient("what time is it") == ""
+        # and a charter with no clauses never produces a block
+        assert Charter(EventLog(root / "n.jsonl"), "").salient("anything") == ""
+
+        # -- adherence: the draft is checked before it is accepted ---------
+        out = rich.shape("The tests pass.", lambda _: "pytest: exit 0, ok")
+        assert out.conformed and "exit 0" in out.text, out.unmet
+        # and an unfixable draft comes through honestly, not dropped
+        stuck = rich.shape("The tests pass.", lambda _: "The tests pass.")
+        assert not stuck.conformed
+        assert stuck.annotated().startswith("The tests pass.")
+        assert "[conform]" in stuck.annotated()
 
         # -- the invariant holds, and is not narrowable --------------------
         import fullagent.covenant as _cov_mod

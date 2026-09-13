@@ -134,7 +134,10 @@ class PromptVault:
 # the sealed prompt — never as a peer instruction. That framing is the
 # whole trick: the prompt stays the only voice giving direction, and the
 # model follows it because everything else defers to it.
-_SECTION_ORDER = ("constitution", "goal", "web", "memory")
+# Order is position in the context, and position is attention. "salient"
+# is last on purpose: it carries the clauses this turn implicates, and the
+# end of the context is where a long prompt is actually read.
+_SECTION_ORDER = ("constitution", "goal", "web", "memory", "salient")
 
 _SECTION_FRAMES = {
     "constitution": ("STANDING CONTEXT — standing rules that apply within "
@@ -144,6 +147,9 @@ _SECTION_FRAMES = {
     "web": ("LIVE CONTEXT — this turn needs real-time data; per the "
             "directives above, use web_search / web_fetch for current "
             "facts and quote sources:"),
+    "salient": ("SPECIFICATION — the clauses this request touches, "
+                "reproduced from the specification above because it is "
+                "long and these are the ones in play:"),
     "memory": ("RECALL CONTEXT — relevant memory from prior work, to "
                "inform the directives above:"),
 }

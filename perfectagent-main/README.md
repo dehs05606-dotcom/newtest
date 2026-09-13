@@ -440,6 +440,58 @@ specification it does not carry.
 
 Check what is loaded with `/prompt`.
 
+## Adherence — making the model follow, not only refusing when it does not
+
+Every module below this point governs what the agent **does**. None of them
+makes it more likely the model follows the specification in the first
+place, and those are different goods: a refused call is a wasted turn, a
+compliant model is the right work. Two modules address adherence itself.
+
+**`salience.py` — the rules where the model actually reads.** Attention
+over a long context is not uniform. A 150k specification puts most of its
+clauses in the middle, which is the weakest position — measured on a
+400-clause spec, the clause governing the request sat at the **50% mark**,
+exactly where recall is worst. The prompt is complete, correct, delivered
+verbatim, and the rules the turn needs are its least visible part.
+
+So the specification ships whole, as before, **and** the few clauses this
+request implicates are restated at the end of the context, composed as the
+last section before generation:
+
+```
+spec: 185,191 chars, 402 clauses
+salient block: 354 chars
+  SQL clause inside: True
+  400 filler clauses inside: 0
+```
+
+No sentence is invented — the text is the author's own clauses, selected by
+term overlap and reproduced unchanged. If nothing is relevant, nothing is
+added: a block saying "no rules apply here" would read as permission.
+
+**`conform.py` — the draft is checked before it is accepted.** `attest.py`
+checks the reply's *claims* and reports, which is right for a record of the
+past. It is wrong for a rule about *form*. If the spec says "never state a
+test passed without the exit code", a reply breaking it is not history to
+preserve — it is a draft that has not met the contract, and nothing stopped
+it reaching the user. That was the last place the specification was purely
+advisory.
+
+```
+[OUT] Test results carry the exit code
+@output forbid (?i)tests? pass(?![^.]*exit)
+
+draft 1  "The tests pass."            → rejected, rule cited
+draft 2  "pytest -q: exit 0, 41 passed" → accepted
+```
+
+Three properties keep it from laundering bad output: it is **bounded** (a
+fixed number of retries, never a loop); it is **honest on failure** (the
+real draft reaches the user with the rules it broke attached, never dropped
+and never fabricated); and **the rules are the author's** — every check is
+an `@output` line in the spec, and the retry note states the rule and the
+miss without ever supplying wording.
+
 ## The enforcement lattice
 
 Guards refuse an intention. That is one point in time and one kind of
