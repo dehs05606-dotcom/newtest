@@ -440,6 +440,65 @@ specification it does not carry.
 
 Check what is loaded with `/prompt`.
 
+## Measuring adherence, and widening what can be measured
+
+"The model does not follow the system prompt" is where every attempt to fix
+this starts, and it is **not actionable** — it does not say which rules, how
+often, or whether the last change helped. A 150k specification is not one
+instruction; it is several hundred, and they do not fail together.
+
+**`adherence.py` — the instrument.** For each clause it builds probes from
+the author's own text, runs them, and scores the replies against that
+clause's checkable rules:
+
+```
+adherence: 1 clause(s) measured · 0% overall
+
+  clause         probes  followed   rate
+  EXIT                3         0    0%   <- weakest
+
+  4 clause(s) carry no checkable rule and were NOT counted as passing:
+    SEC, PATH, COMP, VAGUE
+```
+
+"The model does not follow the prompt" becomes "clause [EXIT] holds 0% of
+the time", which can be acted on. A clause with no checkable rule is
+reported **UNSCORABLE, never as passing** — the same distinction `audit.py`
+draws: silence is not compliance.
+
+**`distill.py` — widening what can be measured.** Most clauses carry no
+rule, and writing four hundred by hand is the correct fix nobody performs.
+This reads the prose and proposes the rule it implies:
+
+```
+[high  ] SEC    @enforce forbid_content: (?i)(api[_-]?key|token|password)…
+[high  ] PATH   @enforce confine_paths: src, tests
+[high  ] EXIT   @output forbid (?i)tests? (pass|fail)\w*(?![^.]*exit)
+2 clause(s) yielded nothing — prose this module cannot read into a rule
+```
+
+It **proposes**; nothing is applied. That restraint is the design, not
+caution: a rule inferred too broadly blocks real work, and an operator's fix
+for a boundary that blocks real work is to switch it off — so a wrong guess
+costs the whole mechanism's credibility. A rule inferred too narrowly is
+worse, because it *reports as enforced*, and the author believes a guarantee
+that does not exist. Every proposal carries its clause, the sentence it was
+read from, and a confidence; clauses it cannot read yield **nothing rather
+than a guess**.
+
+**`critic.py` — the clauses a regex cannot express.** "Prefer composition
+over inheritance", "explain the trade-off before recommending" — no regex
+decides these, so they are the majority of the specification checked by
+nothing. A second pass reads the draft against the prose clauses it touches.
+
+This is the one deliberately non-deterministic part of the package, and it
+is confined: it **only reports** (never refuses, never rewrites); a finding
+must **cite a clause it was shown and quote the draft exactly**, or it is
+discarded — a critic that can invent a violation can block correct work
+forever; and it runs **only on what `conform.py` could not decide**, where a
+model is the only instrument available and a false finding costs one
+regeneration.
+
 ## Adherence — making the model follow, not only refusing when it does not
 
 Every module below this point governs what the agent **does**. None of them

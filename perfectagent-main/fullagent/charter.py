@@ -61,6 +61,7 @@ from . import salience as salience_mod
 from . import remedy
 from .consent import Consent
 from .conform import Conform
+from .critic import Critic
 from .covenant import Covenant
 from .effects import derive
 from .egress import Perimeter
@@ -122,6 +123,8 @@ class Charter:
         # touches, restated where attention is strongest, and the output
         # contract checked against the draft before it is accepted.
         self.conform = Conform(log, self.spec)
+        # the clauses a regex cannot decide — reports only, never refuses
+        self.critic = Critic(log, self.spec)
 
         # evidence
         self.witness = Witness(log)
@@ -148,7 +151,8 @@ class Charter:
         self.spec = spec or ""
         for sub in (self.sequence, self.covenant, self.provenance,
                     self.egress, self.horizon, self.ration,
-                    self.exemptions, self.obligations, self.conform):
+                    self.exemptions, self.obligations, self.conform,
+                    self.critic):
             sub.bind(self.spec)
         self.integrity.seal(self.spec, spec_source, self.covenant)
         if spec_source:
@@ -288,6 +292,16 @@ class Charter:
         it does not meet it. Bounded, and honest when it never does."""
         return self.conform.run(draft, regenerate)
 
+    def critique(self, draft: str, ask):
+        """Read the draft against the prose clauses it touches.
+
+        Separate from shape(): conform.py decides everything a regex can,
+        and this runs on what is left. A finding here is never a refusal —
+        it becomes an instruction for the same bounded retry.
+        """
+        rules = {r.clause for r in self.conform.rules}
+        return self.critic.review(draft, self.covenant.clauses, ask, rules)
+
     def attest(self, reply: str):
         """Check the reply's claims against the sealed record.
 
@@ -327,7 +341,8 @@ class Charter:
         out: list[str] = []
         for sub in (self.covenant, self.sequence, self.provenance,
                     self.egress, self.horizon, self.ration,
-                    self.exemptions, self.obligations, self.conform):
+                    self.exemptions, self.obligations, self.conform,
+                    self.critic):
             out.extend(getattr(sub, "errors", []) or [])
         return out
 
@@ -346,6 +361,7 @@ class Charter:
             self.consent.report(),
             self.obligations.report(),
             self.conform.report(),
+            self.critic.report(),
             self.witness.report(),
         ]
         errs = self.errors()
