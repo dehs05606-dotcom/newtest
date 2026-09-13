@@ -209,7 +209,7 @@ if __name__ == "__main__":
         assert status == "sealed", msg
         assert "sql_surgeon" in _ROLES and "sql_surgeon" in _sp.ROLE_BRIEFS
         assert _ROLES["sql_surgeon"]["writes"] is True   # has write tools
-        assert f"worker:sql_surgeon" in _sp.PROMPTS      # registered live
+        assert "worker:sql_surgeon" in _sp.PROMPTS      # registered live
         assert set(_ROLES["sql_surgeon"]["tools"]) <= set(
             _all_tool_names())
 

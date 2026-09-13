@@ -16,7 +16,6 @@ Design (pure Python, stdlib only):
 
 from __future__ import annotations
 
-import time
 
 from .kernel import EventLog, fold
 

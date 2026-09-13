@@ -3,15 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-PKG = Path("/workspaces/gocli/perfectagent")
+PKG = Path(__file__).resolve().parent
 mods = sorted(p.stem for p in (PKG / "fullagent").glob("*.py"))
 skip = {"__init__", "__main__",
         "agent", "client", "config", "tui"}  # no self-test block
 
+tested = [m for m in mods if m not in skip]
+if not tested:
+    print(f"no modules discovered under {PKG / 'fullagent'}", file=sys.stderr)
+    sys.exit(1)
+
 failed = []
-for m in mods:
-    if m in skip:
-        continue
+for m in tested:
     r = subprocess.run(
         [sys.executable, "-m", f"fullagent.{m}"],
         capture_output=True, text=True, cwd=str(PKG), timeout=300)
@@ -27,4 +30,4 @@ print()
 if failed:
     print(f"{len(failed)} FAILED: {', '.join(failed)}")
     sys.exit(1)
-print(f"ALL {len(mods) - len(skip)} MODULE SELF-TESTS PASS")
+print(f"ALL {len(tested)} MODULE SELF-TESTS PASS")

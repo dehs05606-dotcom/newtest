@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 
 from . import systemprompt
 from .config import PROVIDERS, model_by_id
-from .kernel import EventLog, fold
+from .kernel import EventLog
 from .team import (ROLES, DEFAULT_ROLE, MAX_WORKER_STEPS, MAX_WORKERS,
                    _WRITE_LOCK, chat_with_retry, parse_worker_final)
 from .tools import Tool, build_registry, parse_tool_arguments

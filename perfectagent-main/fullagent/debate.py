@@ -274,7 +274,7 @@ class DebateTournament:
                  f"  champion: [{result.champion_model}] "
                  f"({result.rounds} rounds, "
                  f"{len(result.positions)} participants)",
-                 f"  clusters: " + " | ".join(
+                 "  clusters: " + " | ".join(
                      ", ".join(c) for c in result.clusters)]
         lines.append("  VERDICT: " + result.verdict[:1200])
         for d in result.dissent:

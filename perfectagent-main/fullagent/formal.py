@@ -27,7 +27,6 @@ lands between a write and its verification).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from itertools import permutations
 
 from .kernel import EventLog
 

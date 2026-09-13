@@ -21,21 +21,11 @@ jobs:
         run: pip install -r requirements.txt
       - name: Compile check
         run: python -m compileall -q fullagent
+      # run_selftests.py discovers modules by globbing the package, so a
+      # newly added module is tested automatically. The previous hardcoded
+      # list had already drifted and silently skipped tools.py.
       - name: Run every module self-test
-        run: |
-          fail=0
-          for m in attention autopilot bandit brain cassette causal ci compiler \
-                   cortex council cov crew daemon dashboard debate dual evolution \
-                   fabric forge formal fuzz goal healer homeo judge kernel kgraph \
-                   market mastermind mcts memory merge mesh meta mutate nexus \
-                   oracle race report router semantic skills snapshots speculate \
-                   synth systemprompt taint team theater tower tuner world workflows; do
-            if ! python -m fullagent.$m >/dev/null 2>&1; then
-              echo "SELF-TEST FAILED: $m"
-              fail=1
-            fi
-          done
-          exit $fail
+        run: python run_selftests.py
 
   build:
     needs: selftest
@@ -112,7 +102,7 @@ jobs:
           sed -i 's/^          //' notes.md
       - name: Create GitHub release
         env:
-          GH_TOKEN: *** secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
           gh release view "$VERSION" >/dev/null 2>&1 && gh release delete "$VERSION" --yes || true

@@ -28,7 +28,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from . import config
 from . import systemprompt
@@ -60,7 +60,7 @@ from .mesh import MeshNode
 from .meta import RoleForge, default_drafter as role_drafter
 from .goal import TERMINAL_STATES
 from .report import export_html, export_markdown, forecast, format_forecast
-from .workflows import WorkflowEngine, WorkflowError
+from .workflows import WorkflowEngine
 from .cov import CoverageEngine
 from .daemon import Daemon
 from .dashboard import Dashboard
@@ -1193,12 +1193,12 @@ class Agent:
 
         # A2/I3: snapshot BEFORE any mutation — no write without a
         # committed recovery path
-        snapshot_tree = None
         if ev.name in _MUTATING_TOOLS:
             paths = self._snapshot_paths(ev.name, ev.args)
             if paths:
                 snap = self.store.take(paths)
-                snapshot_tree = snap["tree"]
+                # rewind/revert reads the tree back from the snapshot.taken
+                # event itself (see _snapshot_at), not from a local here
                 self.log.append("snapshot.taken",
                                 {"tree": snap["tree"],
                                  "paths": list(snap["paths"]),

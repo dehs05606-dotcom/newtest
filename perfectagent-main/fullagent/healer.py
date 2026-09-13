@@ -20,7 +20,7 @@ Hard rules (mechanical, rung 1 — no LLM in the loop):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .kernel import EventLog, fold
 

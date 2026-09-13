@@ -33,7 +33,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Event
@@ -270,6 +270,18 @@ class EventLog:
                 # rewind seals a marker event that becomes the new head)
                 self._heads[ev.branch] = ev.id
 
+    def _drop_handle(self) -> None:
+        """Release the current handle before reopening. Dropping the
+        reference alone leaks the descriptor until GC runs, and a long
+        session that keeps hitting the retry paths below would exhaust
+        the process fd limit."""
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
     def _persist(self, ev: Event) -> None:
         try:
             self._write_event(ev)
@@ -278,11 +290,11 @@ class EventLog:
             # fresh mount, etc.) — recreate it and write again. The log
             # must never take the app down over a missing directory.
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._fh = None
+            self._drop_handle()
             self._write_event(ev)
         except ValueError:
             # handle was closed/replaced underneath us — reopen once
-            self._fh = None
+            self._drop_handle()
             self._write_event(ev)
 
     def _write_event(self, ev: Event) -> None:

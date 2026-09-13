@@ -115,7 +115,6 @@ class AttentionEconomy:
 
         bids = {s: self.bid(s, sections[s], query,
                             (fresh or {}).get(s)) for s in names}
-        total_bid = sum(bids.values()) or 1.0
         floor = int(budget * _FLOOR_FRAC)
         ceil = int(budget * _CEIL_FRAC)
 

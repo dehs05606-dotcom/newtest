@@ -26,7 +26,6 @@ self-test runs full auctions offline with scripted workers.
 from __future__ import annotations
 
 import re
-import time
 from dataclasses import dataclass, field
 
 from .kernel import EventLog, fold

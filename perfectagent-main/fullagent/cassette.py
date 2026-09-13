@@ -154,7 +154,7 @@ if __name__ == "__main__":
         assert len(off) == 0
 
         # the cassette file is human-inspectable JSONL
-        lines = path.read_text().strip().splitlines()
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 1
         pair = json.loads(lines[0])
         assert pair["response"] == resp and "key" in pair
