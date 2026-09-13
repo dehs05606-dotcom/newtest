@@ -39,6 +39,7 @@ from .client import (APIError, TurnCancelled, assistant_message,
                      is_context_overflow)
 from .config import Config, Effort, Model, Provider, PROVIDERS, model_by_id
 from .attention import AttentionEconomy
+from .covenant import Covenant
 from .bandit import BanditRouter
 from .brain import Brain
 from .causal import CausalEngine
@@ -275,6 +276,9 @@ class Agent:
             "tool_latency_ms": self._repair_warm_caches,
         })
         self.attention = AttentionEconomy(self.log)
+        # The specification bound to the action boundary. It contributes no
+        # prompt text — it only refuses calls that collide with a clause.
+        self.covenant = Covenant(self.log, systemprompt._SPEC)
         self.fabric = KnowledgeFabric(self.log)
         self.crew = Crew(self.log, self.provider, self.model, self.effort,
                          mastermind=self.mastermind)
@@ -1134,6 +1138,12 @@ class Agent:
         if self.memory.is_dead_end(sig):
             return (f"this exact approach is in the dead-end ledger "
                     f"(signature {sig}) — choose a different approach")
+        # the specification, as a boundary rather than as advice: a call
+        # that collides with an @enforce clause never executes. Last in the
+        # gate so a refusal cites the specification and not a lower rule.
+        breach = self.covenant.gate(tool.name, args)
+        if breach:
+            return breach
         return None
 
     def _snapshot_paths(self, tool_name: str, args: dict) -> list[str]:

@@ -273,6 +273,7 @@ fullagent/
   config.py        providers, models, effort levels, paths
   systemprompt.py  the ONE home of every system prompt (single source)
   mastermind.py    prompt coherence: sealed vault, gate, composer, lineage
+  covenant.py      the spec as a boundary: clauses bound to the action gate
   tools.py         16 tools: files, shell, search, real-time web
   client.py        streaming OpenAI-compatible client (SSE, retries, cancel)
   agent.py         agent loop: LLM <-> tools, event-sourced on the kernel
@@ -357,6 +358,86 @@ and source path, and says so plainly when none is found). After editing
 
 Add more prompts later by dropping a constant in `systemprompt.py` and
 registering it in the `PROMPTS` map (or call `register()` at runtime).
+
+## The Covenant — the specification as a boundary
+
+A system prompt cannot make a model comply. Text is probabilistic: every
+"you MUST", every restated rule, every reminder re-injected into context is
+a *request* the model is free to lose under load, length or distraction.
+The longer the specification, the weaker each line's individual pull — a
+150k spec is exactly where prompt-level compliance fails worst.
+
+So `covenant.py` does not ask. It changes what a violation *does*:
+
+> a clause the agent can violate in its **output** is advice.
+> a clause the agent cannot violate in its **effect** is a boundary.
+
+**Nothing in this subsystem writes a single character into the prompt.**
+The specification is delivered once, verbatim, by `systemprompt.py`, and
+that is all. The model is never told to obey, never reminded, never nagged.
+What the Covenant does is make non-compliant **actions fail to commit**.
+
+**1 — Addressing.** The spec stops being a wall of text and becomes a
+namespace. It is split into stable, content-hashed clauses with ids (`§4.2`,
+`[no-secrets]`, markdown headings). A clause can now be cited, counted and
+bound to.
+
+**2 — Binding.** A clause becomes enforceable when *you* give it a
+machine-checkable rule, written in your own spec next to the prose it
+enforces:
+
+```
+§4.2 Secrets never live in source.
+@enforce forbid_content: (?i)api[_-]?key\s*=\s*["'][A-Za-z0-9]
+```
+
+Nothing is inferred from the prose and nothing is invented. A clause with
+no `@enforce` is unenforced and the report *says so*, rather than being
+silently approximated. A malformed rule is reported as an error, never
+guessed at — a rule that quietly enforces nothing is worse than no rule,
+because you believe you are covered.
+
+| Guard | Refuses a call when |
+|---|---|
+| `forbid_tool` | the tool is used at all |
+| `forbid_path` | it touches paths matching these globs |
+| `confine_paths` | a mutating call leaves these roots (`..` cannot escape) |
+| `forbid_content` | written content matches this regex |
+| `require_content` | content for `where`-matching paths *lacks* this regex |
+| `forbid_command` | `run_command`'s command matches this regex |
+
+Rules may also be written as JSON, which may span lines:
+
+```
+@enforce {"kind": "require_content", "value": "^\\s*[\"']{3}",
+          "where": "*.py"}
+```
+
+**3 — The boundary.** Guards are evaluated against the **pending** tool
+call inside `Agent._gate()`, before it runs. A violation returns a refusal,
+so the call never executes: no snapshot, no write, no side effect. The
+agent learns the rule the way it learns any other refusal — from a real
+gate refusing a real action, exactly as `OrphanAction` and the dead-end
+ledger already work — not from a sentence added to its prompt.
+
+```
+CovenantViolation: this action is refused by the specification (1 clause).
+  §4.2 — Secrets never live in source: content matches forbidden
+         pattern at offset 0: 'API_KEY = "sk-'
+```
+
+Every evaluation is sealed to the event log (`covenant.blocked`), so
+adherence per clause is an auditable number rather than an impression.
+
+Inspect it with `/covenant`:
+
+- `/covenant` — clauses, how many are enforced, how many calls each blocked
+- `/covenant clauses [filter]` — the clause namespace with fingerprints
+- `/covenant test <tool> <json>` — dry-run a call against the boundary
+  without executing it
+
+`/prompt reload` rebinds the Covenant and the prompt together, so the text
+the model receives and the boundary it is held to can never disagree.
 
 ## Output budget — 200k tokens
 

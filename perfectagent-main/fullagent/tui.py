@@ -16,6 +16,7 @@ are navigated with ↑↓, PgUp/PgDn, Tab, Home/End.
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import shutil
 import re
@@ -277,6 +278,8 @@ SLASH_COMMANDS = [
     ("/crew", "persistent subagents — /crew [spawn|send|wait|close|resume|status]"),
     ("/auto", "autopilot self-routing — /auto [on|off|status]"),
     ("/prompt", "system prompt — /prompt [main|master|list|reload]"),
+    ("/covenant", "specification bound to the action boundary — "
+                  "/covenant [report|clauses|test]"),
     ("/mastermind", "prompt coherence ledger — sealed prompts, gate, lineage"),
     ("/dashboard", "live observability — cost, goal, agents, router, spec"),
     ("/router", "smart model routing — decisions + savings"),
@@ -1235,6 +1238,8 @@ class UI:
             self._cmd_auto(arg)
         elif cmd == "/prompt":
             self._cmd_prompt(arg)
+        elif cmd == "/covenant":
+            self._cmd_covenant(arg)
         elif cmd == "/mastermind":
             self.print_info(self.agent.mastermind.format_status(), C["pink"])
         elif cmd == "/dashboard":
@@ -2373,7 +2378,13 @@ class UI:
         if sub == "reload":
             status = systemprompt.reload_spec()
             self.agent._reseat_system_prompt()
-            self.print_info(f"✓ {status}", C["green"])
+            # the boundary is bound to the same text the model receives —
+            # reloading one without the other would let them disagree
+            self.agent.covenant.bind(systemprompt._SPEC)
+            cv = self.agent.covenant.stats()
+            self.print_info(f"✓ {status}\n  covenant rebound: "
+                            f"{cv['clauses']:,} clauses · {cv['enforced']} "
+                            f"enforced · {cv['guards']} guards", C["green"])
             return
         if sub not in systemprompt.PROMPTS:
             self.print_error(f"unknown prompt {sub!r} — available: "
@@ -2386,6 +2397,63 @@ class UI:
         size = len(self.agent._base_prompt())
         self.print_info(f"✓ system prompt → {sub} ({size:,} chars) — "
                         "applies from the next model call", C["green"])
+
+    def _cmd_covenant(self, arg: str) -> None:
+        """Inspect the specification where it is actually enforced: the
+        action boundary. Nothing here changes the prompt."""
+        cov = self.agent.covenant
+        sub, _, rest = arg.strip().partition(" ")
+        sub = sub.lower()
+
+        if sub in ("", "report", "status"):
+            self.print_info(cov.report(), C["cyan"])
+            if cov.errors:
+                self.print_error(f"{len(cov.errors)} @enforce rule(s) are "
+                                 f"malformed and enforce NOTHING — fix them "
+                                 f"in project.txt, then /prompt reload")
+            return
+
+        if sub == "clauses":
+            needle = rest.strip().lower()
+            rows = [c for c in cov.clauses
+                    if not needle or needle in c.id.lower()
+                    or needle in c.title.lower()]
+            if not rows:
+                self.print_info("no clause matches", C["yellow"])
+                return
+            lines = []
+            for c in rows[:200]:
+                mark = "●" if c.enforced else "○"
+                lines.append(f"  {mark} {c.id:<16} {c.fingerprint}  "
+                             f"{c.title[:60]}")
+            if len(rows) > 200:
+                lines.append(f"  … {len(rows) - 200:,} more")
+            self.print_info("\n".join(lines), C["cyan"])
+            return
+
+        if sub == "test":
+            # dry-run a call against the boundary without executing it
+            tool, _, payload = rest.strip().partition(" ")
+            if not tool:
+                self.print_error('usage: /covenant test <tool> {"path": …}')
+                return
+            try:
+                args = json.loads(payload) if payload.strip() else {}
+            except ValueError as e:
+                self.print_error(f"args must be JSON: {e}")
+                return
+            if not isinstance(args, dict):
+                self.print_error("args must be a JSON object")
+                return
+            breach = cov.gate(tool, args)
+            if breach:
+                self.print_error(breach)
+            else:
+                self.print_info("✓ no clause refuses this call", C["green"])
+            return
+
+        self.print_error(f"unknown /covenant subcommand {sub!r} — "
+                         "report · clauses [filter] · test <tool> <json>")
 
     # -- v3 advanced subsystem commands ----------------------------------------
 
