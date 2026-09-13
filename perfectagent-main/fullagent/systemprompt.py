@@ -161,80 +161,56 @@ def with_system(messages: list[dict], system: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# MASTER — the extended, very long system prompt
+# SPEC — the master specification, and the ONLY place it lives
 # ---------------------------------------------------------------------------
-# This is the second, much larger system prompt. It embeds the full master
-# specification (project.txt) so the model carries the entire architecture,
-# invariants, subsystem contracts and Goal-Mode grammar in context. It is
-# far longer than MAIN (which is ~2k chars) — by design.
+# The specification used to be read from a file: $FULLAGENT_SPEC, then
+# ~/.fullagent/project.txt, then a project.txt shipped in the package. That
+# is one indirection too many, and every one of those hops was a way for the
+# prompt the model receives to stop being the prompt this file declares:
+#
+#   * a file can be swapped, truncated, or simply absent, and the agent
+#     starts with 2k chars of preamble where a full specification belongs —
+#     which is exactly the failure this project already hit once, silently
+#   * an environment variable moves the prompt outside the repository, so
+#     nothing under version control describes what the model was told
+#   * three candidate paths mean the answer to "which prompt is in force?"
+#     depends on the machine it is asked on
+#
+# So the specification is no longer data that is loaded. It is CODE that
+# ships: a constant in this module, under version control, content-addressed
+# by integrity.py and protected from the agent's own tool calls by
+# sanctum.py. There is no file to lose, no path to resolve, and no
+# environment in which a different specification can appear.
+#
+# TO INSTALL YOUR SPECIFICATION: paste it between the triple quotes below.
+# Nothing else needs changing — MASTER is rebuilt from it at import.
 
-def spec_candidates() -> list["Path"]:
-    """Every location a master spec may live, in precedence order.
+SPEC = """"""
 
-    A user's own spec must outrank the shipped one and must survive
-    reinstalls, so the home-directory copy wins over the packaged file.
-    FULLAGENT_SPEC overrides both for one-off runs and testing.
-    """
-    from pathlib import Path
-    import os as _os
-    paths = []
-    override = _os.environ.get("FULLAGENT_SPEC", "").strip()
-    if override:
-        paths.append(Path(override).expanduser())
-    paths.append(Path.home() / ".fullagent" / "project.txt")
-    paths.append(Path(__file__).parent / "project.txt")
-    return paths
-
-
-def _load_master_spec() -> tuple[str, str]:
-    """Load the master specification. Returns (text, source).
-
-    Returns ('', '') when no candidate exists, so the module never crashes
-    on import — but SPEC_SOURCE then reads empty, and spec_status() reports
-    it. Silently serving a spec-less MASTER is what made a missing spec
-    invisible before: the prompt still "worked", it was just 2k chars of
-    preamble with the entire specification absent.
-    """
-    for path in spec_candidates():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if text.strip():
-            return text, str(path)
-    return "", ""
-
-
-_SPEC, SPEC_SOURCE = _load_master_spec()
-SPEC_CHARS = len(_SPEC)
+SPEC_CHARS = len(SPEC)
+_SPEC = SPEC          # kept as the name the rest of the package imports
 
 
 def spec_status() -> str:
-    """One-line human-readable report of the loaded spec — surfaced by the
-    /prompt command so a missing spec is visible instead of silent."""
-    if not _SPEC:
-        tried = "\n  ".join(str(p) for p in spec_candidates())
-        return ("master spec NOT loaded — MASTER carries no specification.\n"
-                f"  Place project.txt at one of:\n  {tried}")
-    return (f"master spec loaded: {SPEC_CHARS:,} chars "
-            f"from {SPEC_SOURCE}")
+    """One-line report of the specification compiled into this module."""
+    if not SPEC.strip():
+        return ("master spec is EMPTY — MASTER carries no specification.\n"
+                "  Paste it into the SPEC constant in systemprompt.py; "
+                "there is no file to place.")
+    return (f"master spec: {SPEC_CHARS:,} chars, compiled into "
+            f"systemprompt.py")
 
-
-def reload_spec() -> str:
-    """Re-read the spec from disk and rebuild MASTER in place. Lets a user
-    edit project.txt and pick it up without restarting the process."""
-    global _SPEC, SPEC_SOURCE, SPEC_CHARS, MASTER
-    _SPEC, SPEC_SOURCE = _load_master_spec()
-    SPEC_CHARS = len(_SPEC)
-    MASTER = _build_master(_SPEC)
-    PROMPTS["master"] = MASTER
-    return spec_status()
 
 def _build_master(spec: str) -> str:
-    """MAIN + the full specification, verbatim. The spec is never trimmed,
+    """MAIN + the specification, verbatim. The spec is never trimmed,
     summarised or sampled — a partially-delivered specification is worse
-    than none, because the model cannot tell which half it is missing."""
-    if not spec:
+    than none, because the model cannot tell which half it is missing.
+
+    An empty spec returns MAIN unchanged rather than MAIN plus a banner:
+    a MASTER that announces a specification it does not carry is how a
+    missing spec stayed invisible here once already.
+    """
+    if not spec.strip():
         return MAIN
     return (
         MAIN
@@ -249,7 +225,7 @@ def _build_master(spec: str) -> str:
     )
 
 
-MASTER = _build_master(_SPEC)
+MASTER = _build_master(SPEC)
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +247,31 @@ def get(name: str) -> str:
     return PROMPTS.get(name, MAIN)
 
 
+# The prompts this module DECLARES. They are the single source of truth and
+# cannot be replaced at runtime — see register().
+SOVEREIGN = frozenset({"main", "master", "scout"})
+
+
+class PromptLocked(RuntimeError):
+    """Raised when something tries to replace a sovereign prompt."""
+
+
 def register(name: str, prompt: str) -> None:
-    """Add (or replace) a named system prompt at runtime."""
+    """Add a named system prompt at runtime.
+
+    Sub-agent roles are registered here legitimately (meta.py and
+    evolution.py author `worker:*` prompts), so this door has to stay open.
+    What it must not be is a way to replace the sovereign prompts: if
+    `master` could be overwritten at runtime, "the specification lives in
+    systemprompt.py" would be true only until something called this
+    function, and the single source of truth would be a convention rather
+    than a property.
+    """
+    if name in SOVEREIGN:
+        raise PromptLocked(
+            f"{name!r} is declared in systemprompt.py and cannot be replaced "
+            f"at runtime — edit the module, which is version-controlled, "
+            f"content-addressed and protected from the agent's own writes")
     PROMPTS[name] = prompt
 
 
@@ -301,36 +300,52 @@ if __name__ == "__main__":
     assert get("custom") == "hello prompt"
     assert "master" in names() and "main" in names()
 
-    # A large spec must reach MASTER byte-for-byte. The old assertion here
-    # was `len(MASTER) > len(MAIN)`, which passed on the separator banner
-    # alone — so a MASTER with NO specification at all still looked fine.
-    # Load a real spec through the documented path and verify every byte.
-    import os
-    import tempfile
-    from pathlib import Path
-    with tempfile.TemporaryDirectory() as td:
-        big = "\n".join(f"§{i} invariant line with padding text"
-                        for i in range(4_000))          # ~150k chars
-        spec_file = Path(td) / "project.txt"
-        spec_file.write_text(big, encoding="utf-8")
-        os.environ["FULLAGENT_SPEC"] = str(spec_file)
+    # The specification is a constant in this module, so MASTER is a pure
+    # function of it. The old test loaded a file through $FULLAGENT_SPEC;
+    # there is no longer a file, an env var, or a path to load from.
+    assert _build_master("") == MAIN, "an empty spec must not fake a MASTER"
+
+    big = "\n".join(f"§{i} invariant line with padding text"
+                     for i in range(4_000))          # ~150k chars
+    built = _build_master(big)
+    assert big in built, "the spec was altered on the way into MASTER"
+    assert built.startswith(MAIN) and built.endswith(big)
+    # and it survives the delivery path intact
+    m2: list[dict] = []
+    with_system(m2, built)
+    assert m2[0]["content"] == built and big in m2[0]["content"]
+
+    # MASTER reflects whatever SPEC holds, with no I/O anywhere
+    assert (MASTER == MAIN) == (not SPEC.strip())
+    if SPEC.strip():
+        assert SPEC in MASTER
+
+    # there is no longer any way to load a specification from outside
+    import os as _os
+    for gone in ("spec_candidates", "_load_master_spec", "reload_spec",
+                 "SPEC_SOURCE"):
+        assert gone not in globals(), f"{gone} still exists"
+    _os.environ["FULLAGENT_SPEC"] = "/tmp/should-be-ignored.txt"
+    try:
+        import importlib
+        import fullagent.systemprompt as _sp
+        importlib.reload(_sp)
+        assert _sp.SPEC == SPEC, "an env var changed the specification"
+    finally:
+        _os.environ.pop("FULLAGENT_SPEC", None)
+
+    # the sovereign prompts cannot be replaced at runtime
+    for locked in ("main", "master", "scout"):
         try:
-            reload_spec()
-            assert SPEC_CHARS == len(big), (SPEC_CHARS, len(big))
-            assert SPEC_SOURCE == str(spec_file)
-            # verbatim, not trimmed/sampled: the whole spec is a substring,
-            # and MASTER is exactly MAIN + banner + spec
-            assert big in MASTER, "spec was altered on the way into MASTER"
-            assert MASTER.startswith(MAIN) and MASTER.endswith(big)
-            assert get("master") == MASTER, "registry served a stale MASTER"
-            # and it survives the delivery path intact
-            m2: list[dict] = []
-            with_system(m2, get("master"))
-            assert m2[0]["content"] == MASTER
-            assert big in m2[0]["content"]
-        finally:
-            os.environ.pop("FULLAGENT_SPEC", None)
-            reload_spec()
+            register(locked, "hijacked")
+        except PromptLocked:
+            pass
+        else:
+            raise AssertionError(f"{locked} was replaceable at runtime")
+    assert get("main") == MAIN and get("master") == MASTER
+    # sub-agent roles still register, because they must
+    register("worker:tester", "you are a tester")
+    assert get("worker:tester") == "you are a tester"
 
     print(f"SYSTEMPROMPT SELF-TEST PASS  (MASTER = {len(MASTER):,} chars, "
-          f"spec = {SPEC_CHARS:,} chars)")
+          f"SPEC = {SPEC_CHARS:,} chars, compiled in)")

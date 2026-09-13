@@ -277,7 +277,7 @@ SLASH_COMMANDS = [
     ("/fabric", "bitemporal knowledge — /fabric ask|assert|history"),
     ("/crew", "persistent subagents — /crew [spawn|send|wait|close|resume|status]"),
     ("/auto", "autopilot self-routing — /auto [on|off|status]"),
-    ("/prompt", "system prompt — /prompt [main|master|list|reload]"),
+    ("/prompt", "system prompt — /prompt [main|master|list]"),
     ("/covenant", "specification bound to the action boundary — "
                   "/covenant [report|clauses|test]"),
     ("/enforce", "the whole boundary: what is in force, stopped and owed — "
@@ -2375,20 +2375,14 @@ class UI:
             # serves the compact prompt and nothing says so
             lines.append("")
             lines.append(systemprompt.spec_status())
-            lines.append("switch: /prompt main · /prompt master"
-                         " · reload spec: /prompt reload")
+            lines.append("switch: /prompt main · /prompt master")
             self.print_info("\n".join(lines), C["cyan"])
             return
         if sub == "reload":
-            status = systemprompt.reload_spec()
-            self.agent._reseat_system_prompt()
-            # the boundary is bound to the same text the model receives —
-            # reloading one without the other would let them disagree
-            self.agent.covenant.bind(systemprompt._SPEC)
-            cv = self.agent.covenant.stats()
-            self.print_info(f"✓ {status}\n  covenant rebound: "
-                            f"{cv['clauses']:,} clauses · {cv['enforced']} "
-                            f"enforced · {cv['guards']} guards", C["green"])
+            self.print_error(
+                "there is nothing to reload: the specification is compiled "
+                "into systemprompt.py, not read from a file. Edit the SPEC "
+                "constant and restart.")
             return
         if sub not in systemprompt.PROMPTS:
             self.print_error(f"unknown prompt {sub!r} — available: "
@@ -2436,8 +2430,7 @@ class UI:
             return
 
         if sub == "integrity":
-            report = ag.integrity.verify(systemprompt._SPEC, ag.covenant,
-                                         systemprompt.SPEC_SOURCE)
+            report = ag.integrity.verify(systemprompt.SPEC, ag.covenant)
             self.print_info(report.describe(),
                             C["green"] if report.ok else C["yellow"])
             return
@@ -2474,7 +2467,8 @@ class UI:
             if cov.errors:
                 self.print_error(f"{len(cov.errors)} @enforce rule(s) are "
                                  f"malformed and enforce NOTHING — fix them "
-                                 f"in project.txt, then /prompt reload")
+                                 f"in the SPEC constant in "
+                                 f"systemprompt.py, then restart")
             return
 
         if sub == "clauses":

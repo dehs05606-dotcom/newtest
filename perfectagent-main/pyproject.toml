@@ -24,4 +24,5 @@ packages = ["fullagent"]
 version = {attr = "fullagent.__version__"}
 
 [tool.setuptools.package-data]
-fullagent = ["*.txt", "*.py"]
+# the specification ships as code in systemprompt.py, not as data
+fullagent = ["*.py"]

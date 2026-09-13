@@ -349,320 +349,59 @@ Two prompts ship in the registry, switchable live with `/prompt`:
 
 ### Installing the master specification
 
-`project.txt` is **not** shipped in this repository — it is yours to
-provide. `master` is exactly `MAIN` until you install one. Drop your
-specification at the first path that exists:
+The specification is **not a file**. It is a constant in
+`fullagent/systemprompt.py`:
 
-| Precedence | Path | Use for |
-|---|---|---|
-| 1 | `$FULLAGENT_SPEC` | one-off runs and testing |
-| 2 | `~/.fullagent/project.txt` | **your own spec — survives reinstalls** |
-| 3 | `fullagent/project.txt` | a spec shipped inside the package |
-
-```bash
-mkdir -p ~/.fullagent
-cp /path/to/your/project.txt ~/.fullagent/project.txt
-```
-
-The spec is embedded **verbatim** — never trimmed, summarised or sampled,
-at any size. A 150k-char spec is delivered as 150k chars at `messages[0]`;
-the context shrinker only ever touches tool results, never the system
-prompt. When a spec is present and you have not pinned `prompt` in your
-config, `master` is selected automatically — shipping a specification and
-then sending the compact prompt is the same bug as not loading it at all.
-
-Check what is actually loaded with `/prompt` (it reports the spec's size
-and source path, and says so plainly when none is found). After editing
-`project.txt`, pick it up without restarting via `/prompt reload`.
-
-Add more prompts later by dropping a constant in `systemprompt.py` and
-registering it in the `PROMPTS` map (or call `register()` at runtime).
-
-## Sanctum — the boundary cannot be edited by what it binds
-
-Every rule above is authored in the specification. That is right for rules
-about the project and **circular** for the rule that protects the rules:
-
-```
-§99 The agent never edits the enforcement code.
-@enforce forbid_path: fullagent/covenant.py
-```
-
-A clause lives in the specification. Editing the specification removes the
-clause. A clause forbidding that edit is removed by the very act it forbids.
-The same holds one level down: a guard protecting `covenant.py` is code
-*inside* `covenant.py`.
-
-This was measured, not assumed. With a specification carrying no
-containment clause — `forbid_content` only, a perfectly ordinary spec — the
-agent was **cleared** to rewrite its own guards:
-
-```
-covenant.py (the guards) : ALLOWED  ← hole
-charter.py  (the order)  : ALLOWED  ← hole
-project.txt (the rules)  : ALLOWED  ← hole
-rewrite spec via sed     : ALLOWED  ← hole
-truncate guards via cp   : ALLOWED  ← hole
-```
-
-Earlier refusals came from a `confine_paths` clause that happened to
-exclude those paths. **The boundary was protected by accident**, and an
-accident is not a property.
-
-So `sanctum.py` is deliberately **not a clause**:
-
-- not written in the specification, so editing the spec cannot remove it
-- takes no `@enforce` syntax, so a malformed rule cannot disable it
-- **not narrowable** — an `@except` cannot forgive it and a consent grant
-  cannot spend it; this is the one refusal where an exception is
-  indistinguishable from the attack
-- runs **first**, before any clause, so it holds with an empty, absent or
-  entirely malformed specification
-
-Same spec, after:
-
-```
-covenant.py direct · charter.py direct · project.txt direct
-covenant.py via shell / cp / rm / patch · sanctum.py itself
-  → REFUSED[sanctum]   (every one)
-with a 5-use consent grant → REFUSED
-ordinary work (src/app.py, pytest) → allowed
-```
-
-**Scope, precisely.** This governs the *agent's tool calls*. It is not a
-filesystem permission: a human developing this project edits these files
-directly, with an editor, and should. The claim is narrow and exact — the
-agent cannot rewrite the rules that bind it while being bound by them — and
-that claim was false until now.
-
-## Replay — proving the decisions were the right ones
-
-`witness.py` proves the record is complete and unedited. That is not what
-an operator actually wants, because a chain records *what was decided*, not
-whether it was **correct**. Both of these produce a perfect chain:
-
-- a boundary that judged every call correctly
-- a boundary whose rules were wrong, or were not the rules you think
-
-`replay.py` re-judges every call in the log from a specification you
-supply, and compares:
-
-| | |
-|---|---|
-| `AGREED` | re-judging produces the recorded verdict |
-| `DIVERGED` | the rules today would decide differently |
-| `UNWITNESSED` | no decision at all — enforcement did not run |
-
-`DIVERGED` is deliberately not called *wrong*: it has two causes replay
-cannot tell apart from the log alone — the rules changed since (often
-fine), or the decision never followed from them. `integrity.py` says which.
-Naming a cause it cannot establish would be the overreach this package
-refuses everywhere else.
-
-`independent(decisions, calls, spec)` verifies with **no EventLog and no
-access to the process that produced the record** — three plain values, and
-a verdict you compute yourself.
-
-## The Charter — one boundary, in a declared order
-
-Sixteen subsystems now refuse things. `charter.py` is the composition root
-that runs them in **one stated order**, because leaving that order to
-source layout was not a tidiness problem:
-
-- **Order was accidental.** Whether a call was refused for leaving `src/`
-  or for crossing a file budget decided which message the agent saw — and
-  its next attempt depends on which refusal it got.
-- **Narrowing was partial.** Exemptions and consent narrowed the Covenant,
-  because that is where they were plumbed in. A horizon breach had no route
-  to a granted exception, so "allow this once" worked for some clauses and
-  silently did not for others.
-- **Coverage was unprovable.** Sixteen partial views of one decision cannot
-  be added up afterwards.
-
-```
-1. sequence     preconditions: is this act even in the right order?
-2. covenant     is the act itself permitted?
-3. provenance   is the content's origin permitted?
-4. egress       may this leave the machine?
-5. horizon      does it fit what this window still allows?
-   ↓
-6. exemptions   declared exceptions in the specification
-7. consent      bounded grants a human gave
-8. remedy       what would have been allowed
-9. witness      the decision — allowed or refused — into the chain
-```
-
-The agent asks one question and gets one answer. `/enforce` shows it all.
-
-### The nine
-
-| Module | The gap it closes |
-|---|---|
-| `exemption.py` | **no way to say "except"** — every guard was absolute |
-| `egress.py` | every effect was a filesystem effect; **nothing governed what left the machine** |
-| `provenance.py` | guards judge *what* and *where*, never **where the bytes came from** |
-| `sequence.py` | every rule was timeless; **order** was invisible |
-| `consent.py` | the only override was "turn the rule off" |
-| `ration.py` | budgets (money, tokens, time) were monitored, not enforced |
-| `remedy.py` | a refusal that only says *no* produces a retry loop |
-| `witness.py` | "no violations recorded" was indistinguishable from "the check never ran" |
-| `charter.py` | the order of judgement was wherever someone inserted a line |
-
-**`exemption.py`** — a boundary with no exceptions gets one of two things:
-the clause is dropped (losing all its enforcement for one real exception),
-or it is worked around (surviving on paper while being bypassed in
-practice). The second is worse, because the report still shows it bound.
-Exceptions are scoped to one clause, **narrowing only** — they can forgive
-a violation, never create permission — and every forgiveness is sealed, so
-a load-bearing exception is a number you can see.
-
-```
-§1 Writes stay under src/ and tests/.
+```python
+SPEC = """
+§1 Writes stay under src/ and tests/
 @enforce confine_paths: src, tests
-@except path CHANGELOG.md
+...your specification...
+"""
 ```
 
-**`egress.py`** — a write to `/etc/passwd` is bad and recoverable; a POST
-of it is recoverable by nobody. `allow_hosts` is an **allowlist**: a
-denylist is unbounded and always one entry behind. A host that cannot be
-read before the command runs is refused, for the same reason an opaque
-write is.
+Paste yours between the triple quotes and restart. Nothing else changes —
+`MASTER` is rebuilt from it at import.
 
-**`provenance.py`** — `def parse(s)` is unremarkable; the same lines copied
-out of a `web_fetch` five turns ago may not be. Content is shingled into
-rolling hashes and matched by **overlap**, not equality, because real reuse
-is reindented and renamed. It detects copying above a threshold; it does
-not prove absence of it, and says so.
+**Why it is code and not data.** It used to be read from a file:
+`$FULLAGENT_SPEC`, then `~/.fullagent/project.txt`, then a `project.txt`
+shipped in the package. Every one of those hops was a way for the prompt the
+model receives to stop being the prompt this repository declares:
 
-**`sequence.py`** — "read a file before rewriting it" involves no forbidden
-act. `before` rules refuse the out-of-order call; `after` rules block
-*done*. A read is not consumed by writing twice, but is re-armed when the
-path changes in a way the agent **did not author** — a formatter, a build
-step — because only then is what it read no longer what is on disk.
+- a file can be swapped, truncated, or simply absent — and the agent starts
+  with 2k chars of preamble where a full specification belongs, which is
+  exactly the failure this project already hit once, **silently**
+- an environment variable moves the prompt outside the repository, so
+  nothing under version control describes what the model was told
+- three candidate paths mean "which prompt is in force?" has a different
+  answer on every machine
 
-**`consent.py`** — `grant(clause="1", path="/etc/hosts", uses=1, ttl=300)`.
-Scoped, expiring, single-use, sealed. An **unbounded grant is refused at
-creation**: an operator who asked for "forever" and silently got "an hour"
-would believe the wrong thing about their own system.
+As a constant it is under version control, content-addressed by
+`integrity.py`, and refused to the agent's own tool calls by `sanctum.py`.
+There is no file to lose, no path to resolve, and no environment in which a
+different specification can appear.
 
-**`witness.py`** — every guarantee here rested on the assumption that the
-enforcement code ran. Decisions go into a hash chain — **allowances
-included**, since a chain of refusals proves only that some refusals
-happened. `verify()` finds gaps by comparing witnessed calls against the
-log, and a deleted refusal breaks every link after it. `head()` is what you
-anchor somewhere this process cannot reach.
-
-## The Covenant — the specification as a boundary
-
-A system prompt cannot make a model comply. Text is probabilistic: every
-"you MUST", every restated rule, every reminder re-injected into context is
-a *request* the model is free to lose under load, length or distraction.
-The longer the specification, the weaker each line's individual pull — a
-150k spec is exactly where prompt-level compliance fails worst.
-
-So `covenant.py` does not ask. It changes what a violation *does*:
-
-> a clause the agent can violate in its **output** is advice.
-> a clause the agent cannot violate in its **effect** is a boundary.
-
-**Nothing in this subsystem writes a single character into the prompt.**
-The specification is delivered once, verbatim, by `systemprompt.py`, and
-that is all. The model is never told to obey, never reminded, never nagged.
-What the Covenant does is make non-compliant **actions fail to commit**.
-
-**1 — Addressing.** The spec stops being a wall of text and becomes a
-namespace. It is split into stable, content-hashed clauses with ids (`§4.2`,
-`[no-secrets]`, markdown headings). A clause can now be cited, counted and
-bound to.
-
-**2 — Binding.** A clause becomes enforceable when *you* give it a
-machine-checkable rule, written in your own spec next to the prose it
-enforces:
+**The sovereign prompts are locked.** `register()` still exists, because
+sub-agent roles are authored at runtime (`meta.py`, `evolution.py` register
+`worker:*`). What it cannot do is replace `main`, `master` or `scout` —
+otherwise "the specification lives in systemprompt.py" would hold only
+until something called that function, and a single source of truth would be
+a convention rather than a property.
 
 ```
-§4.2 Secrets never live in source.
-@enforce forbid_content: (?i)api[_-]?key\s*=\s*["'][A-Za-z0-9]
+$FULLAGENT_SPEC set      -> IGNORED
+~/.fullagent/project.txt -> IGNORED
+register("master", ...)  -> PromptLocked
+register("worker:x", ...) -> registers fine
 ```
 
-Nothing is inferred from the prose and nothing is invented. A clause with
-no `@enforce` is unenforced and the report *says so*, rather than being
-silently approximated. A malformed rule is reported as an error, never
-guessed at — a rule that quietly enforces nothing is worse than no rule,
-because you believe you are covered.
+The spec is embedded **verbatim** — never trimmed, summarised or sampled, at
+any size. A 150k-char spec is delivered as 150k chars at `messages[0]`; the
+context shrinker only ever touches tool results, never the system prompt.
+An empty `SPEC` returns `MAIN` unchanged rather than a banner announcing a
+specification it does not carry.
 
-| Guard | Refuses a call when |
-|---|---|
-| `forbid_tool` | this tool is used (names a tool, not an act) |
-| `forbid_effect` | any `write` / `delete` / `exec` / `opaque` effect occurs, **by any route** |
-| `forbid_path` | a write or delete lands on these globs |
-| `confine_paths` | a write or delete leaves these roots (`..` cannot escape) |
-| `forbid_content` | written content matches this regex |
-| `require_content` | content for `where`-matching paths *lacks* this regex |
-| `forbid_command` | `run_command`'s command matches this regex |
-
-### Guards bind to effects, not to tool names
-
-A guard bound to a tool name is a guard bound to *spelling*. `write_file`
-with path `/etc/cron.d/x` and `run_command` with `echo b > /etc/cron.d/x`
-are the same act. A rule that refuses the first and permits the second does
-not constrain the agent — it constrains its vocabulary, and any model
-routes around it simply by picking a different tool for the same job.
-
-So guards never see tool calls. `effects.py` reduces every call to what it
-**does** — `write` / `delete` / `exec` / `opaque` — shell commands
-included: redirections, heredocs, pipelines, `rm` `mv` `cp` `tee` `dd`
-`sed -i` `truncate` `ln` `chmod`. One clause then holds across every route
-to the same effect:
-
-```
-§1 Writes stay under src/ and tests/     →  confine_paths: src, tests
-
-write_file  /etc/cron.d/x                          REFUSED
-run_command echo b > /etc/cron.d/x                 REFUSED   (same effect)
-run_command cp src/a.py /etc/y                     REFUSED   (same effect)
-run_command cat > /etc/z <<'EOF' …                 REFUSED   (same effect)
-run_command echo hi > src/note.txt                 allowed
-run_command pytest -q                              allowed
-```
-
-**The opaque case** is what makes this airtight rather than merely broad.
-Some commands cannot be analysed before they run — `eval "$CMD"`,
-`bash -c …`, `python3 -c …`, `curl … | sh`, a redirect to `$DIR/f`. Their
-effects are unknowable, so no containment claim about them can be *proven*.
-
-An unprovable claim is not treated as a passing one: under a
-`confine_paths` or `forbid_path` clause an opaque call is **refused**,
-because "all writes stay under `src/`" is exactly the guarantee such a
-command breaks. Where you declared no containment, opaque commands run
-normally — the boundary only ever refuses what its clauses actually claim.
-
-That asymmetry is deliberate. A guard that fails *open* when it cannot see
-is decorative: it holds only for actions transparent enough not to need it.
-
-`/covenant test <tool> <json>` prints the effects derived from a call
-before it judges them, so you can see exactly what a rule will be matched
-against while writing it.
-
-### Arming — the unguarded handler is not reachable
-
-Calling the gate from each tool loop is a *convention*, and a convention
-holds only while every executor remembers it. `crew.py` did not: its
-subagents ran `tool.handler(**args)` directly, so the specification bound
-the sovereign agent and nothing else — a worker was a way around every
-clause.
-
-`Covenant.arm()` removes the thing that must be remembered. It wraps each
-handler in the boundary, so the unguarded function is no longer reachable
-from the registry and **any** executor — this one, a subagent, one written
-later — passes the boundary because there is no other way to invoke a tool.
-
-The registry also arms **on insertion** (`Covenant.registry()`), because
-the agent registers another two dozen tools as its subsystems come up, long
-after `arm()` ran. The container holds the invariant, not the caller.
-
-A refusal that fires in the wrapper also seals `covenant.bypassed`: getting
-there without having been refused by `gate()` means an executor skipped the
-gate. The backstop holds the line *and* reports the gap.
+Check what is loaded with `/prompt`.
 
 ## The enforcement lattice
 

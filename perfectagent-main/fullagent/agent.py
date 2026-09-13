@@ -282,8 +282,8 @@ class Agent:
         # Sixteen subsystems judged a call in whatever order they were
         # wired; the Charter runs them in a stated one, narrows uniformly,
         # attaches the remedy, and witnesses the single decision.
-        self.charter = Charter(self.log, systemprompt._SPEC,
-                               systemprompt.SPEC_SOURCE, store=self.store)
+        self.charter = Charter(self.log, systemprompt.SPEC,
+                               store=self.store)
         # names kept for the subsystems the TUI and callers already use
         self.covenant = self.charter.covenant
         self.horizon = self.charter.horizon

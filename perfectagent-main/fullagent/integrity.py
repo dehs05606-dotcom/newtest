@@ -6,16 +6,22 @@ text delivered as the system prompt and the text parsed into clauses came
 from the same place and still agree. Nothing so far checks it, and there
 are ordinary ways for them to diverge with no error anywhere:
 
-  * project.txt is edited mid-session. systemprompt.py holds the bytes it
-    read at import; the Covenant holds clauses parsed from those same
-    bytes; the file on disk is now a third thing. Reloading one without the
-    other leaves the agent reading rules it is not held to, or held to
-    rules it was never shown.
+  * The Covenant is bound to one text and the prompt carries another.
+    Rebinding one without the other leaves the agent reading rules it is
+    not held to, or held to rules it was never shown.
   * A clause is added to the spec but carries no @enforce. It reads as
     binding and enforces nothing.
-  * The spec is truncated by a failed write, or swapped for a different
-    file. MASTER still assembles, the prompt still ships, and the boundary
-    silently governs less than it did.
+  * A caller passes a spec that is not the one in systemprompt.SPEC, so the
+    boundary silently governs something other than what shipped.
+
+The specification is now a constant in systemprompt.py rather than a file,
+which removes the worst of these on its own: there is no path to resolve,
+no environment variable, and nothing to swap between reads. The module's
+own bytes are content-addressed and refused to the agent by sanctum.py, so
+"has the specification changed under us?" is that module's question, not
+this one. What remains here is whether the text the model received and the
+clauses it is held to are the same text — which no amount of file
+protection can answer.
 
 Each of these is quiet. The system keeps working; only its guarantee is
 gone. A guarantee that fails silently is the most expensive kind, because

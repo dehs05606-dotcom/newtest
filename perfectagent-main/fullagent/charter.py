@@ -369,7 +369,7 @@ if __name__ == "__main__":
 §7 A turn costs at most one dollar
 @ration per turn max cost_usd 1.00
 '''
-        ch = Charter(log, spec, str(root / "project.txt"), store=store)
+        ch = Charter(log, spec, store=store)
         assert not ch.errors(), ch.errors()
         ch.open_turn()
 
