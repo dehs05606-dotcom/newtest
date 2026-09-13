@@ -168,31 +168,88 @@ def with_system(messages: list[dict], system: str) -> list[dict]:
 # invariants, subsystem contracts and Goal-Mode grammar in context. It is
 # far longer than MAIN (which is ~2k chars) — by design.
 
-def _load_master_spec() -> str:
-    """Load the master specification (project.txt) that ships beside this
-    module. Returns '' if the file is missing, so the module never crashes
-    on import."""
+def spec_candidates() -> list["Path"]:
+    """Every location a master spec may live, in precedence order.
+
+    A user's own spec must outrank the shipped one and must survive
+    reinstalls, so the home-directory copy wins over the packaged file.
+    FULLAGENT_SPEC overrides both for one-off runs and testing.
+    """
     from pathlib import Path
-    spec = Path(__file__).parent / "project.txt"
-    try:
-        return spec.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    import os as _os
+    paths = []
+    override = _os.environ.get("FULLAGENT_SPEC", "").strip()
+    if override:
+        paths.append(Path(override).expanduser())
+    paths.append(Path.home() / ".fullagent" / "project.txt")
+    paths.append(Path(__file__).parent / "project.txt")
+    return paths
 
 
-_SPEC = _load_master_spec()
+def _load_master_spec() -> tuple[str, str]:
+    """Load the master specification. Returns (text, source).
 
-MASTER = (
-    MAIN
-    + "\n\n"
-    + "=" * 72
-    + "\nFULL MASTER SPECIFICATION — the architecture you operate "
-      "within. Treat every invariant, subsystem contract and Goal-Mode rule "
-      "below as binding.\n"
-    + "=" * 72
-    + "\n\n"
-    + _SPEC
-)
+    Returns ('', '') when no candidate exists, so the module never crashes
+    on import — but SPEC_SOURCE then reads empty, and spec_status() reports
+    it. Silently serving a spec-less MASTER is what made a missing spec
+    invisible before: the prompt still "worked", it was just 2k chars of
+    preamble with the entire specification absent.
+    """
+    for path in spec_candidates():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if text.strip():
+            return text, str(path)
+    return "", ""
+
+
+_SPEC, SPEC_SOURCE = _load_master_spec()
+SPEC_CHARS = len(_SPEC)
+
+
+def spec_status() -> str:
+    """One-line human-readable report of the loaded spec — surfaced by the
+    /prompt command so a missing spec is visible instead of silent."""
+    if not _SPEC:
+        tried = "\n  ".join(str(p) for p in spec_candidates())
+        return ("master spec NOT loaded — MASTER carries no specification.\n"
+                f"  Place project.txt at one of:\n  {tried}")
+    return (f"master spec loaded: {SPEC_CHARS:,} chars "
+            f"from {SPEC_SOURCE}")
+
+
+def reload_spec() -> str:
+    """Re-read the spec from disk and rebuild MASTER in place. Lets a user
+    edit project.txt and pick it up without restarting the process."""
+    global _SPEC, SPEC_SOURCE, SPEC_CHARS, MASTER
+    _SPEC, SPEC_SOURCE = _load_master_spec()
+    SPEC_CHARS = len(_SPEC)
+    MASTER = _build_master(_SPEC)
+    PROMPTS["master"] = MASTER
+    return spec_status()
+
+def _build_master(spec: str) -> str:
+    """MAIN + the full specification, verbatim. The spec is never trimmed,
+    summarised or sampled — a partially-delivered specification is worse
+    than none, because the model cannot tell which half it is missing."""
+    if not spec:
+        return MAIN
+    return (
+        MAIN
+        + "\n\n"
+        + "=" * 72
+        + "\nFULL MASTER SPECIFICATION — the architecture you operate "
+          "within. Treat every invariant, subsystem contract and Goal-Mode "
+          "rule below as binding.\n"
+        + "=" * 72
+        + "\n\n"
+        + spec
+    )
+
+
+MASTER = _build_master(_SPEC)
 
 
 # ---------------------------------------------------------------------------
@@ -237,13 +294,43 @@ if __name__ == "__main__":
     assert len([m for m in msgs if m["role"] == "system"]) == 1
     assert msgs[0]["content"] == SCOUT
 
-    # the extended MASTER prompt must be very long and strictly larger
-    # than MAIN; the registry must resolve it.
-    assert len(MASTER) > len(MAIN)
     assert get("master") == MASTER
     assert get("main") == MAIN
     assert get("nope") == MAIN  # unknown name falls back, never empty
     register("custom", "hello prompt")
     assert get("custom") == "hello prompt"
     assert "master" in names() and "main" in names()
-    print(f"SYSTEMPROMPT SELF-TEST PASS  (MASTER = {len(MASTER):,} chars)")
+
+    # A large spec must reach MASTER byte-for-byte. The old assertion here
+    # was `len(MASTER) > len(MAIN)`, which passed on the separator banner
+    # alone — so a MASTER with NO specification at all still looked fine.
+    # Load a real spec through the documented path and verify every byte.
+    import os
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        big = "\n".join(f"§{i} invariant line with padding text"
+                        for i in range(4_000))          # ~150k chars
+        spec_file = Path(td) / "project.txt"
+        spec_file.write_text(big, encoding="utf-8")
+        os.environ["FULLAGENT_SPEC"] = str(spec_file)
+        try:
+            reload_spec()
+            assert SPEC_CHARS == len(big), (SPEC_CHARS, len(big))
+            assert SPEC_SOURCE == str(spec_file)
+            # verbatim, not trimmed/sampled: the whole spec is a substring,
+            # and MASTER is exactly MAIN + banner + spec
+            assert big in MASTER, "spec was altered on the way into MASTER"
+            assert MASTER.startswith(MAIN) and MASTER.endswith(big)
+            assert get("master") == MASTER, "registry served a stale MASTER"
+            # and it survives the delivery path intact
+            m2: list[dict] = []
+            with_system(m2, get("master"))
+            assert m2[0]["content"] == MASTER
+            assert big in m2[0]["content"]
+        finally:
+            os.environ.pop("FULLAGENT_SPEC", None)
+            reload_spec()
+
+    print(f"SYSTEMPROMPT SELF-TEST PASS  (MASTER = {len(MASTER):,} chars, "
+          f"spec = {SPEC_CHARS:,} chars)")

@@ -246,6 +246,7 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         cfg = cls()
+        data: dict = {}
         try:
             data = json.loads(CONFIG_FILE.read_text())
             if not isinstance(data, dict):
@@ -273,6 +274,14 @@ class Config:
             cfg.effort = DEFAULT_EFFORT
         if not isinstance(cfg.prompt, str) or not cfg.prompt:
             cfg.prompt = "main"
+        # A user who installed a master spec wants it used — shipping their
+        # specification and then sending the 2k compact prompt is the same
+        # bug as not loading it at all. An explicit "prompt" in the config
+        # always wins; this only fills the unset default.
+        if "prompt" not in data:
+            from . import systemprompt
+            if systemprompt.SPEC_CHARS:
+                cfg.prompt = "master"
         return cfg
 
     def save(self) -> None:

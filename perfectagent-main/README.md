@@ -201,8 +201,10 @@ Event-log commands:
   `file_contains`, `file_matches`, `command_output_contains`), or pass a full
   JSON predicate
 - `/auto [on|off|status]` — the AutoPilot self-routing brain (on by default)
-- `/prompt [main|master|list]` — choose the system prompt: `main` (compact)
-  or `master` (the extended 130k+ specification prompt)
+- `/prompt [main|master|list|reload]` — choose the system prompt: `main`
+  (compact) or `master` (MAIN + your full `project.txt` specification);
+  bare `/prompt` reports which spec is loaded and from where, `reload`
+  re-reads it from disk
 - `/mastermind` — the prompt-coherence ledger (sealed prompts, gate,
   composed context, lineage)
 - `/dashboard` — live observability: cost, goal, crew, router, spec,
@@ -322,8 +324,36 @@ Two prompts ship in the registry, switchable live with `/prompt`:
 
 | Name | Size | What it is |
 |---|---|---|
-| `main` | ~1.6k chars | the compact sovereign-agent prompt (default) |
-| `master` | **136,928 chars** | MAIN + the full master specification (`project.txt`) embedded — the entire architecture, invariants, subsystem contracts and Goal-Mode grammar in context |
+| `main` | ~2.4k chars | the compact sovereign-agent prompt |
+| `master` | MAIN + your spec | MAIN + the full master specification (`project.txt`) embedded verbatim — the entire architecture, invariants, subsystem contracts and Goal-Mode grammar in context |
+
+### Installing the master specification
+
+`project.txt` is **not** shipped in this repository — it is yours to
+provide. `master` is exactly `MAIN` until you install one. Drop your
+specification at the first path that exists:
+
+| Precedence | Path | Use for |
+|---|---|---|
+| 1 | `$FULLAGENT_SPEC` | one-off runs and testing |
+| 2 | `~/.fullagent/project.txt` | **your own spec — survives reinstalls** |
+| 3 | `fullagent/project.txt` | a spec shipped inside the package |
+
+```bash
+mkdir -p ~/.fullagent
+cp /path/to/your/project.txt ~/.fullagent/project.txt
+```
+
+The spec is embedded **verbatim** — never trimmed, summarised or sampled,
+at any size. A 150k-char spec is delivered as 150k chars at `messages[0]`;
+the context shrinker only ever touches tool results, never the system
+prompt. When a spec is present and you have not pinned `prompt` in your
+config, `master` is selected automatically — shipping a specification and
+then sending the compact prompt is the same bug as not loading it at all.
+
+Check what is actually loaded with `/prompt` (it reports the spec's size
+and source path, and says so plainly when none is found). After editing
+`project.txt`, pick it up without restarting via `/prompt reload`.
 
 Add more prompts later by dropping a constant in `systemprompt.py` and
 registering it in the `PROMPTS` map (or call `register()` at runtime).

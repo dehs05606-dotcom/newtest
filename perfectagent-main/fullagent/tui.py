@@ -276,7 +276,7 @@ SLASH_COMMANDS = [
     ("/fabric", "bitemporal knowledge — /fabric ask|assert|history"),
     ("/crew", "persistent subagents — /crew [spawn|send|wait|close|resume|status]"),
     ("/auto", "autopilot self-routing — /auto [on|off|status]"),
-    ("/prompt", "system prompt — /prompt [main|master|list]"),
+    ("/prompt", "system prompt — /prompt [main|master|list|reload]"),
     ("/mastermind", "prompt coherence ledger — sealed prompts, gate, lineage"),
     ("/dashboard", "live observability — cost, goal, agents, router, spec"),
     ("/router", "smart model routing — decisions + savings"),
@@ -2362,8 +2362,18 @@ class UI:
                 mark = "●" if name == current else "○"
                 size = len(systemprompt.get(name))
                 lines.append(f"  {mark} {name:<8} {size:>8,} chars")
-            lines.append("switch: /prompt main · /prompt master")
+            # a missing master spec is otherwise invisible: 'master' simply
+            # serves the compact prompt and nothing says so
+            lines.append("")
+            lines.append(systemprompt.spec_status())
+            lines.append("switch: /prompt main · /prompt master"
+                         " · reload spec: /prompt reload")
             self.print_info("\n".join(lines), C["cyan"])
+            return
+        if sub == "reload":
+            status = systemprompt.reload_spec()
+            self.agent._reseat_system_prompt()
+            self.print_info(f"✓ {status}", C["green"])
             return
         if sub not in systemprompt.PROMPTS:
             self.print_error(f"unknown prompt {sub!r} — available: "
