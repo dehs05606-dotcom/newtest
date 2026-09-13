@@ -157,10 +157,14 @@ class Violation:
     clause: str
     kind: str
     detail: str
+    path: str = ""      # the effect's path, when the guard judged one
 
     def to_dict(self) -> dict:
-        return {"clause": self.clause, "kind": self.kind,
-                "detail": self.detail}
+        d = {"clause": self.clause, "kind": self.kind,
+             "detail": self.detail}
+        if self.path:
+            d["path"] = self.path
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +382,8 @@ def evaluate_effects(guards: list[Guard], effects: list[Effect],
                     where = f" on {e.path!r}" if e.path else ""
                     out.append(Violation(
                         g.clause, g.kind,
-                        f"{e.kind} effect{where} is forbidden{_via(e)}"))
+                        f"{e.kind} effect{where} is forbidden{_via(e)}",
+                        path=e.path))
 
         elif g.kind == "forbid_path":
             for e in mutations:
@@ -388,7 +393,7 @@ def evaluate_effects(guards: list[Guard], effects: list[Effect],
                     out.append(Violation(
                         g.clause, g.kind,
                         f"{e.kind} to {e.path!r} matches forbidden pattern "
-                        f"{hit!r}{_via(e)}"))
+                        f"{hit!r}{_via(e)}", path=e.path))
             for e in opaque:
                 out.append(Violation(
                     g.clause, g.kind,
@@ -403,7 +408,7 @@ def evaluate_effects(guards: list[Guard], effects: list[Effect],
                     out.append(Violation(
                         g.clause, g.kind,
                         f"{e.kind} to {e.path!r} is outside the permitted "
-                        f"roots {list(g.roots)}{_via(e)}"))
+                        f"roots {list(g.roots)}{_via(e)}", path=e.path))
             for e in opaque:
                 out.append(Violation(
                     g.clause, g.kind,
@@ -420,7 +425,8 @@ def evaluate_effects(guards: list[Guard], effects: list[Effect],
                     out.append(Violation(
                         g.clause, g.kind,
                         f"content written to {e.path!r} matches forbidden "
-                        f"pattern: {m.group(0)[:60]!r}{_via(e)}"))
+                        f"pattern: {m.group(0)[:60]!r}{_via(e)}",
+                        path=e.path))
 
         elif g.kind == "require_content":
             for e in mutations:
@@ -431,7 +437,7 @@ def evaluate_effects(guards: list[Guard], effects: list[Effect],
                     out.append(Violation(
                         g.clause, g.kind,
                         f"{e.path!r} must contain a match for {g.value!r} "
-                        f"and does not{_via(e)}"))
+                        f"and does not{_via(e)}", path=e.path))
 
         elif g.kind == "forbid_command":
             if command:

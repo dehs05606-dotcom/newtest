@@ -39,11 +39,7 @@ from .client import (APIError, TurnCancelled, assistant_message,
                      is_context_overflow)
 from .config import Config, Effort, Model, Provider, PROVIDERS, model_by_id
 from .attention import AttentionEconomy
-from .covenant import Covenant
-from .horizon import Horizon
-from .integrity import Integrity
-from .obligation import Ledger
-from .sentinel import Sentinel
+from .charter import Charter
 from .bandit import BanditRouter
 from .brain import Brain
 from .causal import CausalEngine
@@ -282,17 +278,18 @@ class Agent:
         self.attention = AttentionEconomy(self.log)
         # The specification bound to the action boundary. It contributes no
         # prompt text — it only refuses calls that collide with a clause.
-        self.covenant = Covenant(self.log, systemprompt._SPEC)
-        # The rest of the boundary: cumulative limits, debts the agent
-        # incurs by acting, and the identity of the specification in force.
-        self.horizon = Horizon(self.log, systemprompt._SPEC)
-        self.obligations = Ledger(self.log, systemprompt._SPEC)
-        self.integrity = Integrity(self.log)
-        self.integrity.seal(systemprompt._SPEC, systemprompt.SPEC_SOURCE,
-                            self.covenant)
-        # Judges a completed call by what it actually did, and reverts it
-        # when a clause was broken by effects no gate could have read.
-        self.sentinel = Sentinel(self.log, self.covenant, self.store)
+        # The whole boundary, assembled in one declared order (charter.py).
+        # Sixteen subsystems judged a call in whatever order they were
+        # wired; the Charter runs them in a stated one, narrows uniformly,
+        # attaches the remedy, and witnesses the single decision.
+        self.charter = Charter(self.log, systemprompt._SPEC,
+                               systemprompt.SPEC_SOURCE, store=self.store)
+        # names kept for the subsystems the TUI and callers already use
+        self.covenant = self.charter.covenant
+        self.horizon = self.charter.horizon
+        self.obligations = self.charter.obligations
+        self.integrity = self.charter.integrity
+        self.sentinel = self.charter.sentinel
         # Arm the registry: after this there is no unguarded handler to
         # call, so every executor passes the boundary whether or not it
         # remembers to ask the gate. The container arms on insertion too,
@@ -1161,14 +1158,9 @@ class Agent:
         # the specification, as a boundary rather than as advice: a call
         # that collides with an @enforce clause never executes. Last in the
         # gate so a refusal cites the specification and not a lower rule.
-        breach = self.covenant.gate(tool.name, args)
-        if breach:
-            return breach
-        # cumulative clauses: refused on the PROJECTED total, so a limit is
-        # never crossed rather than noticed once it has been
-        over = self.horizon.gate(tool.name, args)
-        if over:
-            return over
+        verdict = self.charter.gate(tool.name, args)
+        if not verdict:
+            return verdict.reason
         return None
 
     def _snapshot_paths(self, tool_name: str, args: dict) -> list[str]:
@@ -1284,17 +1276,12 @@ class Agent:
         # judges what occurred. A call whose real effects broke a clause is
         # reverted to the snapshot taken before it ran, so a step nobody
         # could analyse ahead of time still does not get to keep its result.
-        if ev.status == "done" and snapshot_tree:
-            review = self.sentinel.review(ev.name, snapshot_tree,
-                                          snapshot_paths)
-            if not review.clean:
-                ev.status = "error"
-                ev.result = review.detail
-        # cumulative measures and the debts this act incurred are sealed
-        # only for a call that actually stood
         if ev.status == "done":
-            self.horizon.spend(ev.name, ev.args)
-            self.obligations.record(ev.name, ev.args)
+            reverted = self.charter.settled(ev.name, ev.args, ev.result,
+                                            snapshot_tree, snapshot_paths)
+            if reverted:
+                ev.status = "error"
+                ev.result = reverted
 
         # §37.4: after EVERY successful write, re-check the anti-clauses
         if ev.status == "done" and ev.name in _MUTATING_TOOLS:

@@ -281,7 +281,7 @@ SLASH_COMMANDS = [
     ("/covenant", "specification bound to the action boundary — "
                   "/covenant [report|clauses|test]"),
     ("/enforce", "the whole boundary: what is in force, stopped and owed — "
-                 "/enforce [status|audit|owed|integrity]"),
+                 "/enforce [status|audit|owed|integrity|witness|grants]"),
     ("/mastermind", "prompt coherence ledger — sealed prompts, gate, lineage"),
     ("/dashboard", "live observability — cost, goal, agents, router, spec"),
     ("/router", "smart model routing — decisions + savings"),
@@ -2411,16 +2411,17 @@ class UI:
         sub = arg.strip().lower()
 
         if sub in ("", "status"):
-            report = ag.integrity.verify(systemprompt._SPEC, ag.covenant,
-                                         systemprompt.SPEC_SOURCE)
-            blocks = [report.describe(),
-                      ag.covenant.report(),
-                      ag.horizon.report(),
-                      ag.obligations.report(),
-                      f"sentinel: {ag.sentinel.stats()['reviews']} call(s) "
-                      f"reviewed · {ag.sentinel.stats()['reverts']} reverted"]
-            self.print_info("\n\n".join(blocks),
-                            C["green"] if report.ok else C["yellow"])
+            errs = ag.charter.errors()
+            self.print_info(ag.charter.report(),
+                            C["yellow"] if errs else C["cyan"])
+            return
+
+        if sub == "witness":
+            self.print_info(ag.charter.witness.report(), C["cyan"])
+            return
+
+        if sub == "grants":
+            self.print_info(ag.charter.consent.report(), C["cyan"])
             return
 
         if sub == "audit":
@@ -2429,7 +2430,7 @@ class UI:
             return
 
         if sub == "owed":
-            blocker = ag.obligations.blocker()
+            blocker = ag.charter.blocker()
             self.print_info(blocker or "✓ nothing is owed",
                             C["yellow"] if blocker else C["green"])
             return
@@ -2442,7 +2443,8 @@ class UI:
             return
 
         self.print_error(f"unknown /enforce subcommand {sub!r} — "
-                         "status · audit · owed · integrity")
+                         "status · audit · owed · integrity · witness · "
+                         "grants")
 
     def _cmd_covenant(self, arg: str) -> None:
         """Inspect the specification where it is actually enforced: the

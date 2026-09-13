@@ -282,6 +282,15 @@ fullagent/
   integrity.py     the prompt and the boundary must be the same bytes
   audit.py         does this specification actually stop anything?
   escrow.py        stage, judge as a set, then commit or discard
+  exemption.py     the "except" every real specification contains
+  egress.py        the effects that leave the machine
+  provenance.py    where the bytes being written came from
+  sequence.py      the clauses about ORDER
+  consent.py       bounded grants, not standing overrides
+  ration.py        cost, token and time budgets, enforced on projection
+  remedy.py        a refusal that says what WOULD be allowed
+  witness.py       proving the boundary actually ran
+  charter.py       one boundary, assembled in a defined order
   tools.py         16 tools: files, shell, search, real-time web
   client.py        streaming OpenAI-compatible client (SSE, retries, cancel)
   agent.py         agent loop: LLM <-> tools, event-sourced on the kernel
@@ -366,6 +375,95 @@ and source path, and says so plainly when none is found). After editing
 
 Add more prompts later by dropping a constant in `systemprompt.py` and
 registering it in the `PROMPTS` map (or call `register()` at runtime).
+
+## The Charter — one boundary, in a declared order
+
+Sixteen subsystems now refuse things. `charter.py` is the composition root
+that runs them in **one stated order**, because leaving that order to
+source layout was not a tidiness problem:
+
+- **Order was accidental.** Whether a call was refused for leaving `src/`
+  or for crossing a file budget decided which message the agent saw — and
+  its next attempt depends on which refusal it got.
+- **Narrowing was partial.** Exemptions and consent narrowed the Covenant,
+  because that is where they were plumbed in. A horizon breach had no route
+  to a granted exception, so "allow this once" worked for some clauses and
+  silently did not for others.
+- **Coverage was unprovable.** Sixteen partial views of one decision cannot
+  be added up afterwards.
+
+```
+1. sequence     preconditions: is this act even in the right order?
+2. covenant     is the act itself permitted?
+3. provenance   is the content's origin permitted?
+4. egress       may this leave the machine?
+5. horizon      does it fit what this window still allows?
+   ↓
+6. exemptions   declared exceptions in the specification
+7. consent      bounded grants a human gave
+8. remedy       what would have been allowed
+9. witness      the decision — allowed or refused — into the chain
+```
+
+The agent asks one question and gets one answer. `/enforce` shows it all.
+
+### The nine
+
+| Module | The gap it closes |
+|---|---|
+| `exemption.py` | **no way to say "except"** — every guard was absolute |
+| `egress.py` | every effect was a filesystem effect; **nothing governed what left the machine** |
+| `provenance.py` | guards judge *what* and *where*, never **where the bytes came from** |
+| `sequence.py` | every rule was timeless; **order** was invisible |
+| `consent.py` | the only override was "turn the rule off" |
+| `ration.py` | budgets (money, tokens, time) were monitored, not enforced |
+| `remedy.py` | a refusal that only says *no* produces a retry loop |
+| `witness.py` | "no violations recorded" was indistinguishable from "the check never ran" |
+| `charter.py` | the order of judgement was wherever someone inserted a line |
+
+**`exemption.py`** — a boundary with no exceptions gets one of two things:
+the clause is dropped (losing all its enforcement for one real exception),
+or it is worked around (surviving on paper while being bypassed in
+practice). The second is worse, because the report still shows it bound.
+Exceptions are scoped to one clause, **narrowing only** — they can forgive
+a violation, never create permission — and every forgiveness is sealed, so
+a load-bearing exception is a number you can see.
+
+```
+§1 Writes stay under src/ and tests/.
+@enforce confine_paths: src, tests
+@except path CHANGELOG.md
+```
+
+**`egress.py`** — a write to `/etc/passwd` is bad and recoverable; a POST
+of it is recoverable by nobody. `allow_hosts` is an **allowlist**: a
+denylist is unbounded and always one entry behind. A host that cannot be
+read before the command runs is refused, for the same reason an opaque
+write is.
+
+**`provenance.py`** — `def parse(s)` is unremarkable; the same lines copied
+out of a `web_fetch` five turns ago may not be. Content is shingled into
+rolling hashes and matched by **overlap**, not equality, because real reuse
+is reindented and renamed. It detects copying above a threshold; it does
+not prove absence of it, and says so.
+
+**`sequence.py`** — "read a file before rewriting it" involves no forbidden
+act. `before` rules refuse the out-of-order call; `after` rules block
+*done*. A read is not consumed by writing twice, but is re-armed when the
+path changes in a way the agent **did not author** — a formatter, a build
+step — because only then is what it read no longer what is on disk.
+
+**`consent.py`** — `grant(clause="1", path="/etc/hosts", uses=1, ttl=300)`.
+Scoped, expiring, single-use, sealed. An **unbounded grant is refused at
+creation**: an operator who asked for "forever" and silently got "an hour"
+would believe the wrong thing about their own system.
+
+**`witness.py`** — every guarantee here rested on the assumption that the
+enforcement code ran. Decisions go into a hash chain — **allowances
+included**, since a chain of refusals proves only that some refusals
+happened. `verify()` finds gaps by comparing witnessed calls against the
+log, and a deleted refusal breaks every link after it. `head()` is what you
+anchor somewhere this process cannot reach.
 
 ## The Covenant — the specification as a boundary
 
