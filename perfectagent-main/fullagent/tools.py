@@ -33,6 +33,10 @@ class Tool:
     parameters: dict
     handler: Callable[..., str]
     risk: str = RISK_SAFE
+    # True once Covenant.arm() has wrapped the handler in the boundary.
+    # An executor holding an unguarded registry can act outside the
+    # specification, so this is assertable rather than assumed.
+    guarded: bool = False
 
     def openai_schema(self) -> dict:
         return {

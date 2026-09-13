@@ -132,12 +132,13 @@ class Crew:
 
     def __init__(self, log: EventLog, provider, model, effort,
                  mastermind=None, max_agents: int = MAX_AGENTS,
-                 chat=None) -> None:
+                 chat=None, covenant=None) -> None:
         self.log = log
         self.provider = provider
         self.model = model
         self.effort = effort
         self.mastermind = mastermind
+        self.covenant = covenant
         self.max_agents = max(1, int(max_agents))
         self._chat = chat or chat_with_retry
         self._agents: dict[str, CrewAgent] = {}
@@ -145,8 +146,13 @@ class Crew:
         self._lock = threading.Lock()       # protects the roster
         self._names = itertools.cycle(_CALLSIGNS)
         self._counter = 0
-        # role tool whitelists carved from the main registry
+        # role tool whitelists carved from the main registry. A subagent
+        # is bound by the same specification as the sovereign agent, so the
+        # registry is armed before it is carved — a worker must not be the
+        # way around a clause.
         registry = build_registry()
+        if covenant is not None:
+            registry = covenant.arm(registry)
         self._toolsets: dict[str, dict[str, Tool]] = {}
         for role, spec in ROLES.items():
             self._toolsets[role] = {n: registry[n] for n in spec["tools"]

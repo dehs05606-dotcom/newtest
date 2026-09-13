@@ -250,7 +250,54 @@ def derive_command_effects(command: str) -> list[Effect]:
 # tool calls -> effects
 # ---------------------------------------------------------------------------
 
-_SHELL_TOOLS = frozenset({"run_command", "bg_shell", "shell", "bash"})
+_SHELL_TOOLS = frozenset({"run_command", "bg_shell", "shell", "bash",
+                          "live_shell"})
+
+
+def _patch_effects(patch: str) -> list[Effect]:
+    """Writes implied by a unified diff.
+
+    apply_patch edits any number of files in one call, so without this a
+    diff is a route around every path and content clause. Targets come from
+    the `+++ b/path` headers and the written content from the added lines,
+    which is what a content rule must be matched against.
+    """
+    effects: list[Effect] = []
+    target = ""
+    added: list[str] = []
+
+    def _flush() -> None:
+        if target:
+            effects.append(Effect(WRITE, path=target,
+                                  content="\n".join(added),
+                                  reason="apply_patch hunk"))
+
+    for line in (patch or "").splitlines():
+        if line.startswith("+++ "):
+            _flush()
+            name = line[4:].split("\t")[0].strip()
+            if name.startswith(("a/", "b/")):
+                name = name[2:]
+            target = "" if name == "/dev/null" else name
+            added = []
+        elif line.startswith("--- ") or line.startswith("@@"):
+            continue
+        elif line.startswith("+") and target:
+            added.append(line[1:])
+        elif line.startswith("-") and target:
+            # a removal still rewrites the file it lands in
+            pass
+    _flush()
+    return effects
+
+# The tools whose effects derive() can name. A tool outside this set yields
+# no effects, so path and content clauses do not reach it — that limit is
+# real, and Covenant.unnamed_tools() reports it rather than letting it pass
+# for coverage. Such a tool can still be constrained by name (forbid_tool).
+NAMED_TOOLS = frozenset(_SHELL_TOOLS | {
+    "write_file", "edit_file", "create_directory",
+    "delete_path", "move_path", "copy_path", "apply_patch",
+})
 
 
 def derive(tool: str, args: dict) -> list[Effect]:
@@ -282,6 +329,8 @@ def derive(tool: str, args: dict) -> list[Effect]:
     if tool == "copy_path":
         return [Effect(WRITE, path=str(a.get("dst") or ""),
                        reason="copy_path target")]
+    if tool == "apply_patch":
+        return _patch_effects(str(a.get("patch") or ""))
     return []
 
 
@@ -362,8 +411,37 @@ if __name__ == "__main__":
     # a path-shaped binary is read by its basename
     assert any(e.kind == DELETE for e in derive_command_effects("/bin/rm f"))
 
+    # -- apply_patch: a diff is a write, and its added lines are content --
+    patch = (
+        "--- a/src/c.py\n+++ b/src/c.py\n@@ -1 +1,2 @@\n"
+        " x = 1\n+API_KEY = \"sk-1\"\n"
+        "--- a/../etc/y\n+++ b/../etc/y\n@@ -0,0 +1 @@\n+boom\n"
+    )
+    pe = derive("apply_patch", {"patch": patch})
+    got = {(e.kind, e.path) for e in pe}
+    assert (WRITE, "src/c.py") in got, got
+    assert (WRITE, "../etc/y") in got, got
+    assert any("API_KEY" in e.content for e in pe), pe
+
+    # -- live_shell is a shell like any other ------------------------------
+    assert any(e.kind == DELETE and e.path == "f"
+               for e in derive("live_shell", {"command": "rm f"}))
+
     # -- unknown tools yield nothing, rather than a false all-clear --------
     assert derive("read_file", {"path": "x"}) == []
     assert derive("web_search", {"query": "x"}) == []
+
+    # -- INVARIANT: every tool that can change the world must be one the
+    # boundary can read. A mutating tool outside the vocabulary passes
+    # path and content clauses untested, which is how apply_patch and
+    # live_shell were invisible. Adding another must fail here, loudly,
+    # rather than quietly opening a route around every clause.
+    from .tools import RISK_CONFIRM, build_registry
+    mutating = {n for n, t in build_registry().items()
+                if t.risk == RISK_CONFIRM}
+    missing = sorted(mutating - NAMED_TOOLS)
+    assert not missing, (
+        f"mutating tools the boundary cannot read: {missing} — add them to "
+        f"derive() and NAMED_TOOLS, or the specification does not reach them")
 
     print("EFFECTS SELF-TEST PASS")

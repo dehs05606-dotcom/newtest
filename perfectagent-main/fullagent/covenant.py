@@ -76,10 +76,11 @@ import fnmatch
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
 
-from .effects import DELETE, EXEC, OPAQUE, WRITE, Effect, derive
+from .effects import (DELETE, EXEC, NAMED_TOOLS, OPAQUE, WRITE, Effect,
+                      derive)
 from .kernel import EventLog
 
 _EFFECT_KINDS = frozenset({WRITE, DELETE, EXEC, OPAQUE})
@@ -471,6 +472,27 @@ class Covenant:
         (Agent._gate) turns a non-empty list into a refusal."""
         return evaluate(self.guards, tool, args)
 
+    def cite(self, violations: list[Violation]) -> str:
+        """The refusal text — every clause that refused, by id and title."""
+        lines = [f"CovenantViolation: this action is refused by the "
+                 f"specification ({len(violations)} clause"
+                 f"{'s' if len(violations) > 1 else ''})."]
+        for v in violations:
+            clause = self._by_id.get(v.clause)
+            title = f" — {clause.title}" if clause and clause.title else ""
+            lines.append(f"  {v.clause}{title}: {v.detail}")
+        return "\n".join(lines)
+
+    def _record(self, event: str, tool: str,
+                violations: list[Violation]) -> None:
+        self.blocked += 1
+        for v in violations:
+            self._hits[v.clause] = self._hits.get(v.clause, 0) + 1
+        self.log.append(event,
+                        {"tool": tool,
+                         "violations": [v.to_dict() for v in violations]},
+                        actor="kernel")
+
     def gate(self, tool: str, args: dict) -> str | None:
         """Block reason for a pending call, or None to let it proceed.
 
@@ -484,23 +506,82 @@ class Covenant:
             if self.guards:
                 self.cleared += 1
             return None
-        self.blocked += 1
-        for v in violations:
-            self._hits[v.clause] = self._hits.get(v.clause, 0) + 1
-        self.log.append("covenant.blocked",
-                        {"tool": tool,
-                         "violations": [v.to_dict() for v in violations]},
-                        actor="kernel")
-        lines = [f"CovenantViolation: this action is refused by the "
-                 f"specification ({len(violations)} clause"
-                 f"{'s' if len(violations) > 1 else ''})."]
-        for v in violations:
-            clause = self._by_id.get(v.clause)
-            title = f" — {clause.title}" if clause and clause.title else ""
-            lines.append(f"  {v.clause}{title}: {v.detail}")
-        return "\n".join(lines)
+        self._record("covenant.blocked", tool, violations)
+        return self.cite(violations)
+
+    # -- arming: the boundary as the only route to a handler ---------------
+
+    def arm(self, registry: dict) -> dict:
+        """Return `registry` with every handler wrapped in the boundary.
+
+        Calling the gate from each tool loop is a convention, and a
+        convention is only as good as every future executor remembering
+        it — crew.py already ran its subagents' tools by calling
+        `tool.handler(**args)` directly, so the specification bound the
+        sovereign agent and nothing else.
+
+        Arming removes the thing that has to be remembered: the unguarded
+        handler is no longer reachable from the registry, so any executor —
+        this one, a subagent, one written later — passes the boundary
+        because there is no other way to invoke the tool.
+
+        A call refused here ALSO seals 'covenant.bypassed', because
+        reaching this wrapper without having been refused by gate() means
+        some executor skipped the gate. The backstop holds the line and
+        reports the gap rather than hiding it.
+        """
+        armed: dict = {}
+        for name, tool in registry.items():
+            armed[name] = self.arm_one(name, tool)
+        return armed
+
+    def arm_one(self, name: str, tool):
+        """Wrap a single tool. Idempotent — an armed tool is returned as is."""
+        if getattr(tool, "guarded", False):
+            return tool
+        return replace(tool, handler=self._wrap(name, tool.handler),
+                       guarded=True)
+
+    def registry(self, initial: dict | None = None) -> "ArmedRegistry":
+        """A tool registry that arms on insertion.
+
+        arm() secures the tools that exist when it runs, but the agent
+        registers a further two dozen directly into its registry as the
+        advanced subsystems come up. Those would arrive unguarded, which is
+        the same convention problem one level higher: someone must remember.
+
+        This container holds the invariant instead — an unguarded tool
+        cannot be put in, whenever or wherever it is registered.
+        """
+        return ArmedRegistry(self, initial)
+
+    def _wrap(self, name: str, handler):
+        def guarded(**args) -> str:
+            violations = self.check(name, args)
+            if not violations:
+                return handler(**args)
+            self._record("covenant.bypassed", name, violations)
+            return "ERROR: " + self.cite(violations)
+        guarded.__name__ = f"guarded_{name}"
+        guarded.__doc__ = getattr(handler, "__doc__", "")
+        return guarded
 
     # -- observation --------------------------------------------------------
+
+    @staticmethod
+    def unnamed_tools(registry: dict) -> list[str]:
+        """Armed tools whose effects effects.derive() cannot name.
+
+        Arming routes every tool through the boundary, but a path or
+        content clause can only judge effects it can read. A tool outside
+        the effect vocabulary passes those clauses because nothing was
+        derived to test — not because it was found compliant.
+
+        That gap is reported instead of being left to look like coverage,
+        so the author can see exactly which tools their containment clauses
+        do not reach and name them directly with forbid_tool if they must.
+        """
+        return sorted(set(registry) - NAMED_TOOLS)
 
     def stats(self) -> dict:
         return {
@@ -536,6 +617,36 @@ class Covenant:
         for e in self.errors:
             lines.append(f"  !! {e}")
         return "\n".join(lines)
+
+
+class ArmedRegistry(dict):
+    """A tool registry whose every member is bound to the boundary.
+
+    Subclasses dict so it drops into the places a plain registry already
+    goes, but no insertion route leaves a handler unguarded.
+    """
+
+    def __init__(self, covenant: Covenant, initial: dict | None = None):
+        super().__init__()
+        self._covenant = covenant
+        if initial:
+            for name, tool in initial.items():
+                self[name] = tool
+
+    def __setitem__(self, name, tool) -> None:
+        super().__setitem__(name, self._covenant.arm_one(name, tool))
+
+    def setdefault(self, name, default=None):
+        if name not in self:
+            self[name] = default
+        return self[name]
+
+    def update(self, other=(), /, **kw) -> None:  # type: ignore[override]
+        items = other.items() if hasattr(other, "items") else other
+        for name, tool in items:
+            self[name] = tool
+        for name, tool in kw.items():
+            self[name] = tool
 
 
 if __name__ == "__main__":
@@ -700,7 +811,85 @@ It is documentation, and the report says so rather than pretending.
         assert empty.gate("delete_path", {"path": "anything"}) is None
         assert "no specification bound" in empty.report()
 
-        # 7. the report distinguishes bound clauses from prose
+        # 7. ARMING — the unguarded handler is not reachable
+        from .tools import Tool
+
+        calls: list[tuple] = []
+
+        def _writer(**kw) -> str:
+            calls.append(kw)
+            return "OK wrote"
+
+        registry = {"write_file": Tool("write_file", "w", {}, _writer),
+                    "delete_path": Tool("delete_path", "d", {}, _writer)}
+        assert not any(t.guarded for t in registry.values())
+
+        arm_log = EventLog(Path(td) / "arm.jsonl")
+        armed_cov = Covenant(arm_log, spec)
+        armed = armed_cov.arm(registry)
+        assert all(t.guarded for t in armed.values())
+
+        # an in-policy call reaches the real handler
+        assert armed["write_file"].handler(
+            path="src/a.py", content='"""d."""') == "OK wrote"
+        assert len(calls) == 1
+
+        # a refused call never reaches it, even though nothing asked a gate
+        out = armed["write_file"].handler(path="/etc/passwd", content="x")
+        assert out.startswith("ERROR: CovenantViolation"), out
+        assert len(calls) == 1, "handler ran despite the refusal"
+
+        # …and the same act through the shell is refused identically
+        registry2 = {"run_command": Tool("run_command", "r", {}, _writer)}
+        armed2 = armed_cov.arm(registry2)
+        assert armed2["run_command"].handler(
+            command="echo x > /etc/passwd").startswith("ERROR:")
+        assert len(calls) == 1
+
+        # reaching the backstop means an executor skipped the gate, and
+        # that is recorded rather than passed over in silence
+        bypassed = [e for e in arm_log.events()
+                    if e.type == "covenant.bypassed"]
+        assert len(bypassed) == 2, bypassed
+        assert bypassed[0].data["violations"][0]["clause"] == "1"
+
+        # arming is idempotent: re-arming does not double-wrap
+        assert armed_cov.arm(armed)["write_file"] is armed["write_file"]
+
+        # 7b. the registry arms on insertion, so a tool registered later —
+        # as the agent's advanced subsystems do, long after arm() ran —
+        # cannot arrive unguarded
+        live = armed_cov.registry(registry)
+        assert all(t.guarded for t in live.values())
+        live["late_tool"] = Tool("late_tool", "registered later", {}, _writer)
+        assert live["late_tool"].guarded
+        live.update({"later_still": Tool("later_still", "x", {}, _writer)})
+        assert live["later_still"].guarded
+        live.setdefault("latest", Tool("latest", "x", {}, _writer))
+        assert live["latest"].guarded
+        # and it enforces, not merely marks
+        before = len(calls)
+        assert live["write_file"].handler(
+            path="/etc/shadow", content="x").startswith("ERROR:")
+        assert len(calls) == before
+
+        # 7c. arming is not the same as coverage, and the difference is
+        # reported: a tool outside the effect vocabulary passes path and
+        # content clauses because nothing was derived to test, not because
+        # it was found compliant.
+        blind = Covenant.unnamed_tools(live)
+        assert "late_tool" in blind and "write_file" not in blind, blind
+        assert live["late_tool"].guarded          # armed…
+        assert live["late_tool"].handler(path="/etc/anything") == "OK wrote"
+        # …but nameable directly, which does reach it
+        byname = Covenant(EventLog(Path(td) / "byname.jsonl"),
+                          "§20 that tool is not used here\n"
+                          "@enforce forbid_tool: late_tool\n")
+        reg3 = byname.registry({"late_tool": Tool("late_tool", "x", {},
+                                                  _writer)})
+        assert reg3["late_tool"].handler(path="/etc/x").startswith("ERROR:")
+
+        # 8. the report distinguishes bound clauses from prose
         rep = cov.report()
         # preamble and §6 carry prose only
         assert "2 clause(s) carry no @enforce rule" in rep

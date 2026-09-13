@@ -451,6 +451,47 @@ is decorative: it holds only for actions transparent enough not to need it.
 before it judges them, so you can see exactly what a rule will be matched
 against while writing it.
 
+### Arming — the unguarded handler is not reachable
+
+Calling the gate from each tool loop is a *convention*, and a convention
+holds only while every executor remembers it. `crew.py` did not: its
+subagents ran `tool.handler(**args)` directly, so the specification bound
+the sovereign agent and nothing else — a worker was a way around every
+clause.
+
+`Covenant.arm()` removes the thing that must be remembered. It wraps each
+handler in the boundary, so the unguarded function is no longer reachable
+from the registry and **any** executor — this one, a subagent, one written
+later — passes the boundary because there is no other way to invoke a tool.
+
+The registry also arms **on insertion** (`Covenant.registry()`), because
+the agent registers another two dozen tools as its subsystems come up, long
+after `arm()` ran. The container holds the invariant, not the caller.
+
+A refusal that fires in the wrapper also seals `covenant.bypassed`: getting
+there without having been refused by `gate()` means an executor skipped the
+gate. The backstop holds the line *and* reports the gap.
+
+### Arming is not the same as coverage
+
+A path or content clause can only judge effects it can read. A tool outside
+the effect vocabulary passes those clauses because nothing was derived to
+test — **not** because it was found compliant. `/covenant` reports exactly
+which tools those are, so the gap is named rather than left looking like
+coverage. Such a tool can still be constrained by name:
+
+```
+@enforce forbid_tool: some_tool
+```
+
+Reporting that gap immediately found two real ones: `apply_patch` writes any
+number of files from a unified diff, and `live_shell` is a persistent shell
+— both were invisible to every clause. Both are now derived (a diff's
+`+++ b/path` headers are writes and its added lines are content), and an
+invariant in `effects.py` asserts that **every `RISK_CONFIRM` tool is one
+the boundary can read**, so the next mutating tool fails the self-test
+loudly instead of quietly opening a route around the specification.
+
 Rules may also be written as JSON, which may span lines:
 
 ```

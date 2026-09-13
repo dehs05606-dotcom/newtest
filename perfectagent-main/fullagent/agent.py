@@ -279,9 +279,15 @@ class Agent:
         # The specification bound to the action boundary. It contributes no
         # prompt text — it only refuses calls that collide with a clause.
         self.covenant = Covenant(self.log, systemprompt._SPEC)
+        # Arm the registry: after this there is no unguarded handler to
+        # call, so every executor passes the boundary whether or not it
+        # remembers to ask the gate. The container arms on insertion too,
+        # so the tools the advanced subsystems register below arrive bound
+        # rather than needing to be armed again after each one.
+        self.tools = self.covenant.registry(self.tools)
         self.fabric = KnowledgeFabric(self.log)
         self.crew = Crew(self.log, self.provider, self.model, self.effort,
-                         mastermind=self.mastermind)
+                         mastermind=self.mastermind, covenant=self.covenant)
         self.autopilot = AutoPilot(self.log)
         self.nexus = Nexus()
         self.forge = Forge(self.log)

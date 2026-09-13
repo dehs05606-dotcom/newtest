@@ -2407,6 +2407,22 @@ class UI:
 
         if sub in ("", "report", "status"):
             self.print_info(cov.report(), C["cyan"])
+            reg = self.agent.tools
+            unarmed = [n for n, t in reg.items() if not t.guarded]
+            unnamed = cov.unnamed_tools(reg)
+            lines = [f"tools: {len(reg) - len(unarmed)}/{len(reg)} armed"]
+            if unarmed:
+                lines.append(f"  !! UNGUARDED: {', '.join(unarmed)}")
+            if unnamed and cov.guards:
+                lines.append(
+                    f"  {len(unnamed)} tool(s) have no effects the boundary "
+                    f"can read, so path/content clauses do not reach them:")
+                lines.append("  " + ", ".join(unnamed[:20])
+                             + (" …" if len(unnamed) > 20 else ""))
+                lines.append("  constrain one by name with "
+                             "`@enforce forbid_tool: <name>`")
+            self.print_info("\n".join(lines),
+                            C["yellow"] if unarmed else C["cyan"])
             if cov.errors:
                 self.print_error(f"{len(cov.errors)} @enforce rule(s) are "
                                  f"malformed and enforce NOTHING — fix them "
