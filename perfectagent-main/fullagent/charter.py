@@ -1,6 +1,6 @@
 """CHARTER — one boundary, assembled in a defined order.
 
-There are now sixteen modules that each refuse something, and until this
+There are now eighteen modules that each refuse something, and until this
 one they were wired into the agent by hand, one call at a time, in whatever
 order they were written. That is a real problem and not a tidiness one:
 
@@ -15,7 +15,7 @@ order they were written. That is a real problem and not a tidiness one:
     so "allow this once" worked for some clauses and silently did not for
     others.
   * COVERAGE WAS UNPROVABLE. Each subsystem had its own counters and no
-    one place knew whether all of them had run for a given call. Sixteen
+    one place knew whether all of them had run for a given call. Eighteen
     partial views of one decision cannot be added up afterwards.
 
 The Charter is the composition root. It owns every enforcement subsystem,
@@ -25,6 +25,9 @@ comes out. The agent asks it one question and gets one answer.
 
     ORDER OF JUDGEMENT — declared here, not inherited from source layout:
 
+      0. sanctum       would this rewrite the rules doing the judging?
+                       Not a clause, not narrowable, consulted first, and
+                       in force even with no specification at all.
       1. sequence      preconditions: is this act even in the right order?
       2. covenant      is the act itself permitted?
       3. provenance    is the content's origin permitted?
@@ -53,6 +56,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import attest as attest_mod
 from . import remedy
 from .consent import Consent
 from .covenant import Covenant
@@ -65,6 +69,7 @@ from .kernel import EventLog
 from .obligation import Ledger
 from .provenance import Lineage
 from .ration import Estimate, Ration
+from .sanctum import Sanctum
 from .sequence import Timeline
 from .witness import Witness
 
@@ -89,6 +94,12 @@ class Charter:
                  spec_source: str = "", store=None) -> None:
         self.log = log
         self.spec = spec or ""
+
+        # The invariant that is not a clause: the boundary's own code and
+        # the specification in force cannot be rewritten by what they bind.
+        # Constructed before everything else and consulted before every
+        # clause, so it holds even with no specification at all.
+        self.sanctum = Sanctum(log, spec_source)
 
         # judgement
         self.sequence = Timeline(log, self.spec)
@@ -133,6 +144,9 @@ class Charter:
                     self.exemptions, self.obligations):
             sub.bind(self.spec)
         self.integrity.seal(self.spec, spec_source, self.covenant)
+        if spec_source:
+            self.sanctum.spec_source = spec_source
+        self.sanctum.seal()
 
     # -- the single gate ----------------------------------------------------
 
@@ -141,6 +155,15 @@ class Charter:
         args = args or {}
         effects = derive(tool, args)
         command = str(args.get("command") or "")
+
+        # 0: the invariant. Before any clause, and never narrowed — an
+        # exception to "do not rewrite your own rules" is indistinguishable
+        # from the act it would forgive.
+        sealed = self.sanctum.gate(tool, args)
+        if sealed:
+            self.refused += 1
+            self.witness.refuse(tool, ["sanctum"])
+            return Verdict(False, sealed, "sanctum", [], 0)
 
         # 1-5: judgement, in the declared order
         stages: list[tuple[str, list]] = [
@@ -244,6 +267,21 @@ class Charter:
             self.provenance.observe(tool, args, result)
         return ""
 
+    def attest(self, reply: str):
+        """Check the reply's claims against the sealed record.
+
+        Everything else governs what the agent DOES; this is the only thing
+        that looks at what it SAYS it did, which is where a specification is
+        most casually broken. It reports and never rewrites the reply: an
+        edited transcript would be a worse record than the log it came from.
+        """
+        att = attest_mod.attest(reply or "", self.log)
+        attest_mod.seal(self.log, att)
+        if att.contradicted:
+            self.witness.refuse("assistant.reply",
+                                [f"claim:{c.kind}" for c in att.contradicted])
+        return att
+
     def open_turn(self) -> None:
         self.horizon.open_turn()
         self.ration.open_turn()
@@ -275,6 +313,7 @@ class Charter:
     def report(self) -> str:
         blocks = [
             self.integrity.verify(self.spec, self.covenant).describe(),
+            self.sanctum.report(),
             f"charter: {self.allowed} allowed · {self.refused} refused",
             self.covenant.report(),
             self.sequence.report(),
@@ -390,6 +429,20 @@ if __name__ == "__main__":
         # the obligation does not refuse the discharging write
         assert ch2.gate("write_file", {"path": "tests/test_parser.py",
                                        "content": "t"}).allowed
+
+        # -- the invariant holds, and is not narrowable --------------------
+        import fullagent.covenant as _cov_mod
+        boundary = _cov_mod.__file__
+        v = ch.gate("write_file", {"path": boundary, "content": "# gutted"})
+        assert not v and v.source == "sanctum", v.source
+        assert "cannot be excepted" in v.reason
+        # not even with a grant for it
+        ch.consent.grant("sanctum", uses=1, ttl=60, reason="try to bypass")
+        v = ch.gate("run_command", {"command": f"echo x > {boundary}"})
+        assert not v and v.source == "sanctum", "a grant bypassed the invariant"
+        # and it holds with no specification whatsoever
+        bare = Charter(EventLog(root / "bare.jsonl"), "")
+        assert not bare.gate("write_file", {"path": boundary, "content": "x"})
 
         # -- every decision is witnessed, allowed ones included ------------
         a = ch.witness.verify()

@@ -617,6 +617,15 @@ class Agent:
                                  "session": self.session_id},
                                 actor="sovereign", provenance="model",
                                 causation_id=user_ev.id)
+                # the reply is a claim about the world, and the log knows:
+                # a contradicted claim is surfaced rather than left to
+                # stand as the only artefact the user actually reads
+                att = self.charter.attest(result.content)
+                if att.contradicted:
+                    turn.assistant_text += (
+                        "\n\n[attest] "
+                        + "; ".join(f"{c.quote.strip()!r} — {c.evidence}"
+                                    for c in att.contradicted))
                 self._detect_goal_clauses(result.content)
                 break
             else:

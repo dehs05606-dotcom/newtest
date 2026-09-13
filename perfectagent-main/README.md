@@ -291,6 +291,8 @@ fullagent/
   remedy.py        a refusal that says what WOULD be allowed
   witness.py       proving the boundary actually ran
   charter.py       one boundary, assembled in a defined order
+  sanctum.py       the boundary cannot be edited by what it binds
+  replay.py        re-deriving the decisions, to prove they were right
   tools.py         16 tools: files, shell, search, real-time web
   client.py        streaming OpenAI-compatible client (SSE, retries, cancel)
   agent.py         agent loop: LLM <-> tools, event-sourced on the kernel
@@ -375,6 +377,91 @@ and source path, and says so plainly when none is found). After editing
 
 Add more prompts later by dropping a constant in `systemprompt.py` and
 registering it in the `PROMPTS` map (or call `register()` at runtime).
+
+## Sanctum — the boundary cannot be edited by what it binds
+
+Every rule above is authored in the specification. That is right for rules
+about the project and **circular** for the rule that protects the rules:
+
+```
+§99 The agent never edits the enforcement code.
+@enforce forbid_path: fullagent/covenant.py
+```
+
+A clause lives in the specification. Editing the specification removes the
+clause. A clause forbidding that edit is removed by the very act it forbids.
+The same holds one level down: a guard protecting `covenant.py` is code
+*inside* `covenant.py`.
+
+This was measured, not assumed. With a specification carrying no
+containment clause — `forbid_content` only, a perfectly ordinary spec — the
+agent was **cleared** to rewrite its own guards:
+
+```
+covenant.py (the guards) : ALLOWED  ← hole
+charter.py  (the order)  : ALLOWED  ← hole
+project.txt (the rules)  : ALLOWED  ← hole
+rewrite spec via sed     : ALLOWED  ← hole
+truncate guards via cp   : ALLOWED  ← hole
+```
+
+Earlier refusals came from a `confine_paths` clause that happened to
+exclude those paths. **The boundary was protected by accident**, and an
+accident is not a property.
+
+So `sanctum.py` is deliberately **not a clause**:
+
+- not written in the specification, so editing the spec cannot remove it
+- takes no `@enforce` syntax, so a malformed rule cannot disable it
+- **not narrowable** — an `@except` cannot forgive it and a consent grant
+  cannot spend it; this is the one refusal where an exception is
+  indistinguishable from the attack
+- runs **first**, before any clause, so it holds with an empty, absent or
+  entirely malformed specification
+
+Same spec, after:
+
+```
+covenant.py direct · charter.py direct · project.txt direct
+covenant.py via shell / cp / rm / patch · sanctum.py itself
+  → REFUSED[sanctum]   (every one)
+with a 5-use consent grant → REFUSED
+ordinary work (src/app.py, pytest) → allowed
+```
+
+**Scope, precisely.** This governs the *agent's tool calls*. It is not a
+filesystem permission: a human developing this project edits these files
+directly, with an editor, and should. The claim is narrow and exact — the
+agent cannot rewrite the rules that bind it while being bound by them — and
+that claim was false until now.
+
+## Replay — proving the decisions were the right ones
+
+`witness.py` proves the record is complete and unedited. That is not what
+an operator actually wants, because a chain records *what was decided*, not
+whether it was **correct**. Both of these produce a perfect chain:
+
+- a boundary that judged every call correctly
+- a boundary whose rules were wrong, or were not the rules you think
+
+`replay.py` re-judges every call in the log from a specification you
+supply, and compares:
+
+| | |
+|---|---|
+| `AGREED` | re-judging produces the recorded verdict |
+| `DIVERGED` | the rules today would decide differently |
+| `UNWITNESSED` | no decision at all — enforcement did not run |
+
+`DIVERGED` is deliberately not called *wrong*: it has two causes replay
+cannot tell apart from the log alone — the rules changed since (often
+fine), or the decision never followed from them. `integrity.py` says which.
+Naming a cause it cannot establish would be the overreach this package
+refuses everywhere else.
+
+`independent(decisions, calls, spec)` verifies with **no EventLog and no
+access to the process that produced the record** — three plain values, and
+a verdict you compute yourself.
 
 ## The Charter — one boundary, in a declared order
 
